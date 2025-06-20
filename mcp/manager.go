@@ -38,7 +38,7 @@ func NewManager(configs map[string]config.MCPServer) *Manager {
 	m := &Manager{
 		servers: make(map[string]*Server),
 	}
-	
+
 	// Initialize servers from configs
 	for name, cfg := range configs {
 		m.servers[name] = &Server{
@@ -46,7 +46,7 @@ func NewManager(configs map[string]config.MCPServer) *Manager {
 			Config: cfg,
 		}
 	}
-	
+
 	return m
 }
 
@@ -68,7 +68,7 @@ func (m *Manager) StartAll() error {
 func (m *Manager) GetServer(name string) (*Server, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	server, exists := m.servers[name]
 	return server, exists
 }
@@ -87,9 +87,9 @@ func (m *Manager) StopAll() {
 // startServer starts a single MCP server
 func (m *Manager) startServer(name string, cfg config.MCPServer) error {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
-	
+
 	// Set environment variables
 	cmd.Env = os.Environ()
 	for key, value := range cfg.Env {

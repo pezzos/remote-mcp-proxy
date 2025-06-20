@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
 // JSONRPCMessage represents a JSON-RPC 2.0 message
@@ -24,22 +25,59 @@ type RPCError struct {
 
 // RemoteMCPMessage represents a Remote MCP protocol message
 type RemoteMCPMessage struct {
-	Type    string      `json:"type"`
-	ID      interface{} `json:"id,omitempty"`
-	Method  string      `json:"method,omitempty"`
-	Params  interface{} `json:"params,omitempty"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *RPCError   `json:"error,omitempty"`
+	Type   string      `json:"type"`
+	ID     interface{} `json:"id,omitempty"`
+	Method string      `json:"method,omitempty"`
+	Params interface{} `json:"params,omitempty"`
+	Result interface{} `json:"result,omitempty"`
+	Error  *RPCError   `json:"error,omitempty"`
+}
+
+// InitializeParams represents parameters for the initialize request
+type InitializeParams struct {
+	ProtocolVersion string                 `json:"protocolVersion"`
+	Capabilities    map[string]interface{} `json:"capabilities"`
+	ClientInfo      ClientInfo             `json:"clientInfo"`
+}
+
+// InitializeResult represents the result of the initialize request
+type InitializeResult struct {
+	ProtocolVersion string                 `json:"protocolVersion"`
+	Capabilities    map[string]interface{} `json:"capabilities"`
+	ServerInfo      ServerInfo             `json:"serverInfo"`
+}
+
+// ClientInfo represents information about the client
+type ClientInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// ServerInfo represents information about the server
+type ServerInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// ConnectionState tracks the state of an MCP connection
+type ConnectionState struct {
+	Initialized     bool
+	ProtocolVersion string
+	Capabilities    map[string]interface{}
+	SessionID       string
 }
 
 // Translator handles protocol translation between Remote MCP and local MCP
 type Translator struct {
-	// Could add state tracking here if needed
+	connections map[string]*ConnectionState
+	mu          sync.RWMutex
 }
 
 // NewTranslator creates a new protocol translator
 func NewTranslator() *Translator {
-	return &Translator{}
+	return &Translator{
+		connections: make(map[string]*ConnectionState),
+	}
 }
 
 // RemoteToMCP converts a Remote MCP message to local MCP JSON-RPC format
@@ -74,7 +112,7 @@ func (t *Translator) MCPToRemote(mcpData []byte) ([]byte, error) {
 	if jsonrpcMsg.Result != nil || jsonrpcMsg.Error != nil {
 		messageType = "response"
 	}
-	
+
 	// Convert to Remote MCP format
 	remoteMsg := RemoteMCPMessage{
 		Type:   messageType,
@@ -98,12 +136,12 @@ func (t *Translator) ValidateMessage(data []byte, isRemoteMCP bool) error {
 		if err := json.Unmarshal(data, &msg); err != nil {
 			return err
 		}
-		
+
 		// Validate JSON-RPC 2.0 format
 		if msg.JSONRPC != "2.0" {
 			return fmt.Errorf("invalid JSON-RPC version: %s", msg.JSONRPC)
 		}
-		
+
 		return nil
 	}
 }
@@ -140,3 +178,92 @@ const (
 	InvalidParams  = -32602
 	InternalError  = -32603
 )
+
+// MCP Protocol constants
+const (
+	MCPProtocolVersion = "2024-11-05"
+	ProxyServerName    = "remote-mcp-proxy"
+	ProxyServerVersion = "1.0.0"
+)
+
+// HandleInitialize processes the MCP initialize request
+func (t *Translator) HandleInitialize(sessionID string, params InitializeParams) (*InitializeResult, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Validate protocol version
+	if params.ProtocolVersion != MCPProtocolVersion {
+		return nil, fmt.Errorf("unsupported protocol version: %s", params.ProtocolVersion)
+	}
+
+	// Create or update connection state
+	state := &ConnectionState{
+		Initialized:     false,
+		ProtocolVersion: MCPProtocolVersion,
+		Capabilities:    make(map[string]interface{}),
+		SessionID:       sessionID,
+	}
+
+	// Set basic capabilities for proxy
+	state.Capabilities = map[string]interface{}{
+		"tools":     map[string]interface{}{},
+		"resources": map[string]interface{}{},
+		"prompts":   map[string]interface{}{},
+	}
+
+	t.connections[sessionID] = state
+
+	return &InitializeResult{
+		ProtocolVersion: MCPProtocolVersion,
+		Capabilities:    state.Capabilities,
+		ServerInfo: ServerInfo{
+			Name:    ProxyServerName,
+			Version: ProxyServerVersion,
+		},
+	}, nil
+}
+
+// HandleInitialized processes the MCP initialized notification
+func (t *Translator) HandleInitialized(sessionID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	state, exists := t.connections[sessionID]
+	if !exists {
+		return fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	state.Initialized = true
+	return nil
+}
+
+// IsInitialized checks if a session has completed initialization
+func (t *Translator) IsInitialized(sessionID string) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	state, exists := t.connections[sessionID]
+	return exists && state.Initialized
+}
+
+// GetConnectionState returns the connection state for a session
+func (t *Translator) GetConnectionState(sessionID string) (*ConnectionState, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	state, exists := t.connections[sessionID]
+	return state, exists
+}
+
+// RemoveConnection removes a connection state
+func (t *Translator) RemoveConnection(sessionID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	delete(t.connections, sessionID)
+}
+
+// IsHandshakeMessage checks if a message is part of the handshake process
+func (t *Translator) IsHandshakeMessage(method string) bool {
+	return method == "initialize" || method == "notifications/initialized"
+}
