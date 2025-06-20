@@ -16,12 +16,14 @@ This is a Remote MCP Proxy service that runs in Docker to bridge local MCP serve
 
 ## Development Commands
 
-Since this is a new project, common commands will be added as the build system is established:
-
-- Build: `docker build -t remote-mcp-proxy .`
-- Run: `docker run -v /path/to/config.json:/app/config.json -p 8080:8080 remote-mcp-proxy`
-- Test: (to be determined based on chosen test framework)
-- Lint: (to be determined based on chosen language and tooling)
+- **Local Build**: `go build -o remote-mcp-proxy .`
+- **Local Run**: `./remote-mcp-proxy` (requires config.json at /app/config.json)
+- **Install Dependencies**: `go mod tidy`
+- **Docker Build**: `docker build -t remote-mcp-proxy .`
+- **Docker Run**: `docker run -v $(pwd)/config.json:/app/config.json -p 8080:8080 remote-mcp-proxy`
+- **Docker Compose**: `docker-compose up -d`
+- **Test**: (to be implemented)
+- **Lint**: `go fmt ./...` and `go vet ./...`
 
 ## Configuration
 
