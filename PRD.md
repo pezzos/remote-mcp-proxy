@@ -87,10 +87,87 @@ Uses the same format as `claude_desktop_config.json`:
 - [x] Create Docker image and deployment configuration
 
 ### Phase 4: Advanced Features
-- [ ] Configuration hot-reloading
-- [ ] Process restart policies and recovery
-- [ ] Metrics and observability
-- [ ] Rate limiting and security features
+
+#### Code Quality and Reliability Improvements (CRITICAL)
+- [ ] **Fix Context/Timeout Handling (HIGH PRIORITY)**
+  - Add timeout contexts to `ReadMessage()` method in `mcp/manager.go:188-206`
+  - Implement non-blocking reads with context cancellation
+  - Add timeout handling to SSE connection loops in `proxy/server.go:115-149`
+  - **Implementation**: Use `context.WithTimeout()` and `select` statements for non-blocking operations
+
+- [ ] **Fix Goroutine Leaks (HIGH PRIORITY)**
+  - Fix monitor goroutine cleanup in `mcp/manager.go:209-224`
+  - Ensure proper context cancellation handling
+  - Add defer cleanup functions for all goroutines
+  - **Implementation**: Use `select` with `ctx.Done()` and proper defer cleanup
+
+- [ ] **Fix Race Conditions (HIGH PRIORITY)**
+  - Fix server assignment race condition in `mcp/manager.go:131`
+  - Move server assignment inside mutex protection
+  - **Implementation**: Ensure all server map updates are mutex-protected
+
+- [ ] **Improve Resource Cleanup (MEDIUM PRIORITY)**
+  - Fix pipe cleanup in `mcp/manager.go:150-152`
+  - Close Stdin/Stdout pipes in Stop() method
+  - Prevent resource leaks on server shutdown
+  - **Implementation**: Add explicit pipe closure with error handling
+
+- [ ] **Enhanced Error Handling and Logging (MEDIUM PRIORITY)**
+  - Add proper error handling for ignored errors in `proxy/server.go:52,199,329`
+  - Implement structured logging with levels (ERROR, WARN, INFO, DEBUG)
+  - Add context to all error messages
+  - **Implementation**: Replace `log.Printf` with structured logging and handle all `w.Write()` errors
+
+#### Security and Authentication Enhancements
+- [ ] **Strengthen Authentication (MEDIUM PRIORITY)**
+  - Implement proper OAuth token validation in `proxy/server.go:332-363`
+  - Add JWT token support and validation
+  - Environment-based authentication configuration
+  - **Implementation**: Add OAuth provider integration or JWT validation library
+
+- [ ] **Enhanced Health Checks (MEDIUM PRIORITY)**
+  - Implement comprehensive health check in `proxy/server.go:48-53`
+  - Add individual MCP server health status
+  - Return proper HTTP status codes based on health
+  - **Implementation**: Create `HealthStatus` struct with per-server health monitoring
+
+#### Performance and Scalability
+- [ ] **Connection Pooling and Management (HIGH PRIORITY)**
+  - Implement connection pooling for SSE connections
+  - Add buffered message handling to prevent blocking
+  - Limit concurrent connections per server
+  - **Implementation**: Use connection pools and message buffers with goroutine limits
+
+- [ ] **Async Message Handling (HIGH PRIORITY)**
+  - Replace blocking `Scanner.Scan()` with async buffered reading
+  - Implement message queues for high-throughput scenarios
+  - Add backpressure handling
+  - **Implementation**: Use channels and buffered readers with worker pools
+
+#### Advanced Features (Original)
+- [ ] **Configuration Hot-reloading**
+  - Watch config file changes with `fsnotify`
+  - Reload MCP server configurations without restart
+  - Graceful server restart on config changes
+  - **Implementation**: File watcher with signal-based reload mechanism
+
+- [ ] **Process Restart Policies and Recovery**
+  - Automatic restart of failed MCP servers
+  - Exponential backoff for restart attempts
+  - Health-based restart decisions
+  - **Implementation**: Add restart policies with configurable backoff and limits
+
+- [ ] **Metrics and Observability**
+  - Prometheus metrics integration
+  - Request/response latency tracking
+  - Connection count and health metrics
+  - **Implementation**: Add `/metrics` endpoint with Prometheus client library
+
+- [ ] **Rate Limiting and Security Features**
+  - Request rate limiting per client/IP
+  - DDoS protection mechanisms
+  - Request size limits and validation
+  - **Implementation**: Use token bucket or sliding window rate limiting
 
 ## Technology Stack
 
