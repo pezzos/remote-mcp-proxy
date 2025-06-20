@@ -159,6 +159,19 @@ func (s *Server) Stop() {
 
 	if s.Process == nil {
 		log.Printf("WARNING: Server %s already stopped or not started", s.Name)
+		// Still clean up pipes even if no process
+		if s.Stdin != nil {
+			if err := s.Stdin.Close(); err != nil {
+				log.Printf("ERROR: Failed to close stdin for server %s: %v", s.Name, err)
+			}
+			s.Stdin = nil
+		}
+		if s.Stdout != nil {
+			if err := s.Stdout.Close(); err != nil {
+				log.Printf("ERROR: Failed to close stdout for server %s: %v", s.Name, err)
+			}
+			s.Stdout = nil
+		}
 		return
 	}
 

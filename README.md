@@ -157,6 +157,89 @@ docker run -v $(pwd)/config.json:/app/config.json -p 8080:8080 remote-mcp-proxy
 - **Lint**: `go fmt ./...` and `go vet ./...`
 - **Dependencies**: `go mod tidy`
 
+### Testing
+
+The Remote MCP Proxy includes comprehensive tests to ensure reliability and correctness.
+
+#### Quick Test
+
+```bash
+# Run all tests
+./test/run-tests.sh
+```
+
+#### Manual Testing
+
+```bash
+# Unit tests only
+go test -v ./protocol ./mcp ./proxy
+
+# Integration tests
+go test -v .
+
+# Tests with coverage
+go test -cover ./...
+
+# Short tests (skip integration)
+go test -short ./...
+
+# Benchmarks
+go test -bench=. -benchmem ./...
+```
+
+#### Test Configurations
+
+Several test configurations are provided in the `test/` directory:
+
+- **`test/minimal-config.json`**: Basic echo server for testing
+- **`test/development-config.json`**: Common MCP servers for development  
+- **`test/production-config.json`**: Production server examples
+- **`test/config.json`**: Full test suite configuration
+
+#### Testing with Different Configurations
+
+```bash
+# Test with minimal config
+CONFIG_PATH=./test/minimal-config.json ./remote-mcp-proxy
+
+# Test with development servers (requires npm packages)
+CONFIG_PATH=./test/development-config.json ./remote-mcp-proxy
+
+# Test specific functionality
+curl http://localhost:8080/health
+curl -X GET http://localhost:8080/simple-echo/sse \
+  -H "Accept: text/event-stream"
+```
+
+#### Test Coverage
+
+The test suite covers:
+
+- **Protocol Translation**: JSON-RPC ↔ Remote MCP message conversion
+- **Connection Management**: Session handling, timeouts, cleanup
+- **Error Handling**: Invalid requests, server failures, network issues
+- **Concurrency**: Multiple simultaneous connections
+- **Authentication**: Token validation and CORS
+- **Health Checks**: Server status monitoring
+- **Integration**: End-to-end workflow testing
+
+#### CI/CD Testing
+
+For automated testing in CI environments:
+
+```bash
+# Install dependencies
+go mod download
+
+# Run tests with XML output (for CI)
+go test -v ./... -coverprofile=coverage.out
+go tool cover -html=coverage.out -o coverage.html
+
+# Static analysis
+go vet ./...
+go fmt ./...
+```
+
 ### Adding New MCP Servers
 
 1. Add the server configuration to `config.json`

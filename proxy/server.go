@@ -167,7 +167,7 @@ func (s *Server) Router() http.Handler {
 	r := mux.NewRouter()
 
 	// Health check endpoint
-	r.HandleFunc("/health", s.handleHealth).Methods("GET")
+	r.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
 
 	// MCP server endpoints - pattern: /{server-name}/sse
 	r.HandleFunc("/{server:[^/]+}/sse", s.handleMCPRequest).Methods("GET", "POST")

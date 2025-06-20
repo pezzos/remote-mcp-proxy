@@ -22,7 +22,9 @@ This is a Remote MCP Proxy service that runs in Docker to bridge local MCP serve
 - **Docker Build**: `docker build -t remote-mcp-proxy .`
 - **Docker Run**: `docker run -v $(pwd)/config.json:/app/config.json -p 8080:8080 remote-mcp-proxy`
 - **Docker Compose**: `docker-compose up -d`
-- **Test**: (to be implemented)
+- **Test**: `go test ./...` or `./test/run-tests.sh`
+- **Test Coverage**: `go test -cover ./...`
+- **Benchmarks**: `go test -bench=. ./...`
 - **Lint**: `go fmt ./...` and `go vet ./...`
 
 ## Configuration
@@ -190,8 +192,13 @@ go vet ./...
 # 3. Build to verify compilation
 go build -o remote-mcp-proxy .
 
-# 4. Test if tests exist
-go test ./...
+# 4. Run tests (comprehensive)
+./test/run-tests.sh
+
+# OR run specific test types:
+go test -v ./protocol ./mcp ./proxy  # Unit tests
+go test -v .                        # Integration tests
+go test -cover ./...                # With coverage
 ```
 
 #### Development Cycle
