@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/mux"
 	"remote-mcp-proxy/mcp"
@@ -17,15 +20,145 @@ import (
 
 // Server represents the HTTP proxy server
 type Server struct {
-	mcpManager *mcp.Manager
-	translator *protocol.Translator
+	mcpManager        *mcp.Manager
+	translator        *protocol.Translator
+	connectionManager *ConnectionManager
+}
+
+// ConnectionManager manages active SSE connections
+type ConnectionManager struct {
+	connections    map[string]*ConnectionInfo
+	maxConnections int
+	mu             sync.RWMutex
+}
+
+// ConnectionInfo holds information about an active connection
+type ConnectionInfo struct {
+	SessionID   string
+	ServerName  string
+	ConnectedAt time.Time
+	Context     context.Context
+	Cancel      context.CancelFunc
+}
+
+// NewConnectionManager creates a new connection manager
+func NewConnectionManager(maxConnections int) *ConnectionManager {
+	return &ConnectionManager{
+		connections:    make(map[string]*ConnectionInfo),
+		maxConnections: maxConnections,
+	}
+}
+
+// AddConnection adds a new connection to the manager
+func (cm *ConnectionManager) AddConnection(sessionID, serverName string, ctx context.Context, cancel context.CancelFunc) error {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	// Check connection limit
+	if len(cm.connections) >= cm.maxConnections {
+		log.Printf("WARNING: Connection limit reached (%d), rejecting new connection for session %s", cm.maxConnections, sessionID)
+		return fmt.Errorf("connection limit reached: %d", cm.maxConnections)
+	}
+
+	// Add connection
+	cm.connections[sessionID] = &ConnectionInfo{
+		SessionID:   sessionID,
+		ServerName:  serverName,
+		ConnectedAt: time.Now(),
+		Context:     ctx,
+		Cancel:      cancel,
+	}
+
+	log.Printf("INFO: Added connection for session %s (total: %d/%d)", sessionID, len(cm.connections), cm.maxConnections)
+	return nil
+}
+
+// RemoveConnection removes a connection from the manager
+func (cm *ConnectionManager) RemoveConnection(sessionID string) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	if conn, exists := cm.connections[sessionID]; exists {
+		// Cancel the connection context
+		if conn.Cancel != nil {
+			conn.Cancel()
+		}
+		delete(cm.connections, sessionID)
+		log.Printf("INFO: Removed connection for session %s (remaining: %d)", sessionID, len(cm.connections))
+	}
+}
+
+// GetConnectionCount returns the current number of active connections
+func (cm *ConnectionManager) GetConnectionCount() int {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+	return len(cm.connections)
+}
+
+// GetConnections returns a copy of all active connections
+func (cm *ConnectionManager) GetConnections() map[string]ConnectionInfo {
+	cm.mu.RLock()
+	defer cm.mu.RUnlock()
+
+	result := make(map[string]ConnectionInfo)
+	for k, v := range cm.connections {
+		result[k] = *v
+	}
+	return result
+}
+
+// CleanupStaleConnections removes connections that have been inactive for too long
+func (cm *ConnectionManager) CleanupStaleConnections(maxAge time.Duration) {
+	cm.mu.Lock()
+	defer cm.mu.Unlock()
+
+	now := time.Now()
+	var removed []string
+
+	for sessionID, conn := range cm.connections {
+		if now.Sub(conn.ConnectedAt) > maxAge {
+			if conn.Cancel != nil {
+				conn.Cancel()
+			}
+			delete(cm.connections, sessionID)
+			removed = append(removed, sessionID)
+		}
+	}
+
+	if len(removed) > 0 {
+		log.Printf("INFO: Cleaned up %d stale connections: %v", len(removed), removed)
+	}
 }
 
 // NewServer creates a new proxy server
 func NewServer(mcpManager *mcp.Manager) *Server {
-	return &Server{
-		mcpManager: mcpManager,
-		translator: protocol.NewTranslator(),
+	const maxConnections = 100 // Configurable connection limit
+
+	server := &Server{
+		mcpManager:        mcpManager,
+		translator:        protocol.NewTranslator(),
+		connectionManager: NewConnectionManager(maxConnections),
+	}
+
+	// Start background cleanup routine
+	go server.startConnectionCleanup()
+
+	log.Printf("INFO: Created proxy server with max %d connections", maxConnections)
+	return server
+}
+
+// startConnectionCleanup starts a background goroutine to clean up stale connections
+func (s *Server) startConnectionCleanup() {
+	ticker := time.NewTicker(30 * time.Second) // Cleanup every 30 seconds
+	defer ticker.Stop()
+
+	maxAge := 10 * time.Minute // Remove connections older than 10 minutes
+
+	for {
+		select {
+		case <-ticker.C:
+			s.connectionManager.CleanupStaleConnections(maxAge)
+		}
 	}
 }
 
@@ -49,7 +182,12 @@ func (s *Server) Router() http.Handler {
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"healthy"}`))
+
+	if _, err := w.Write([]byte(`{"status":"healthy"}`)); err != nil {
+		log.Printf("ERROR: Failed to write health response: %v", err)
+	} else {
+		log.Printf("DEBUG: Health check response sent successfully")
+	}
 }
 
 // handleMCPRequest handles Remote MCP requests and forwards them to local MCP servers
@@ -88,6 +226,17 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	// Get or generate session ID
 	sessionID := s.getSessionID(r)
 
+	// Create cancellable context for this connection
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Check connection limits and add to manager
+	if err := s.connectionManager.AddConnection(sessionID, mcpServer.Name, ctx, cancel); err != nil {
+		log.Printf("ERROR: Failed to add connection for session %s: %v", sessionID, err)
+		http.Error(w, "Too many connections", http.StatusTooManyRequests)
+		return
+	}
+
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -95,39 +244,68 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Session-ID", sessionID)
 
-	// Send initial connection event
-	fmt.Fprintf(w, "event: connected\n")
-	fmt.Fprintf(w, "data: {\"type\":\"connected\",\"server\":\"%s\",\"sessionId\":\"%s\"}\n\n", mcpServer.Name, sessionID)
+	// Send initial connection event with connection count
+	if _, err := fmt.Fprintf(w, "event: connected\n"); err != nil {
+		log.Printf("ERROR: Failed to write SSE connected event: %v", err)
+		s.connectionManager.RemoveConnection(sessionID)
+		return
+	}
+
+	connectionData := fmt.Sprintf(`{"type":"connected","server":"%s","sessionId":"%s","connectionCount":%d}`,
+		mcpServer.Name, sessionID, s.connectionManager.GetConnectionCount())
+
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", connectionData); err != nil {
+		log.Printf("ERROR: Failed to write SSE connected data: %v", err)
+		s.connectionManager.RemoveConnection(sessionID)
+		return
+	}
 
 	// Flush to send the event immediately
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
 	}
 
-	// Keep connection alive and listen for MCP messages
-	ctx := r.Context()
+	// Clean up when connection closes
 	defer func() {
-		// Clean up connection state when SSE connection closes
+		s.connectionManager.RemoveConnection(sessionID)
 		s.translator.RemoveConnection(sessionID)
-		log.Printf("SSE connection closed for server: %s, session: %s", mcpServer.Name, sessionID)
+		log.Printf("INFO: SSE connection cleanup completed for server %s, session %s", mcpServer.Name, sessionID)
 	}()
+
+	// Create a ticker for periodic checks and timeouts
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	log.Printf("INFO: Starting SSE message loop for server %s, session %s", mcpServer.Name, sessionID)
 
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("INFO: SSE context cancelled for server %s, session %s", mcpServer.Name, sessionID)
 			return
-		default:
+		case <-ticker.C:
 			// Only process messages if connection is initialized
 			if !s.translator.IsInitialized(sessionID) {
-				// Wait a bit before checking again
 				continue
 			}
 
-			// Read message from MCP server (non-blocking)
-			message, err := mcpServer.ReadMessage()
+			// Create a timeout context for reading messages
+			readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+
+			// Read message from MCP server with timeout
+			message, err := mcpServer.ReadMessage(readCtx)
+			cancel()
+
 			if err != nil {
-				if err.Error() != "EOF" {
-					log.Printf("Error reading from MCP server %s: %v", mcpServer.Name, err)
+				// Handle different types of errors appropriately
+				if err == context.DeadlineExceeded {
+					// Timeout is normal, just continue
+					continue
+				} else if err == context.Canceled {
+					log.Printf("INFO: Read cancelled for server %s", mcpServer.Name)
+					return
+				} else if err.Error() != "EOF" {
+					log.Printf("ERROR: Error reading from MCP server %s: %v", mcpServer.Name, err)
 				}
 				continue
 			}
@@ -135,16 +313,28 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 			// Translate and send message
 			remoteMCPMessage, err := s.translator.MCPToRemote(message)
 			if err != nil {
-				log.Printf("Error translating MCP message: %v", err)
+				log.Printf("ERROR: Error translating MCP message for server %s: %v", mcpServer.Name, err)
 				continue
 			}
 
-			fmt.Fprintf(w, "event: message\n")
-			fmt.Fprintf(w, "data: %s\n\n", string(remoteMCPMessage))
+			// Write SSE event with error handling
+			if _, err := fmt.Fprintf(w, "event: message\n"); err != nil {
+				log.Printf("ERROR: Failed to write SSE event header for server %s: %v", mcpServer.Name, err)
+				return
+			}
+
+			if _, err := fmt.Fprintf(w, "data: %s\n\n", string(remoteMCPMessage)); err != nil {
+				log.Printf("ERROR: Failed to write SSE data for server %s: %v", mcpServer.Name, err)
+				return
+			}
 
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
+			} else {
+				log.Printf("WARNING: ResponseWriter does not support flushing for server %s", mcpServer.Name)
 			}
+
+			log.Printf("DEBUG: Sent SSE message for server %s", mcpServer.Name)
 		}
 	}
 }
@@ -196,7 +386,12 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 	// Return success response (HTTP 202 Accepted for MCP)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"status":"accepted"}`))
+
+	if _, err := w.Write([]byte(`{"status":"accepted"}`)); err != nil {
+		log.Printf("ERROR: Failed to write MCP message response: %v", err)
+	} else {
+		log.Printf("INFO: MCP message accepted and forwarded successfully")
+	}
 }
 
 // corsMiddleware adds CORS headers to all responses
@@ -247,13 +442,21 @@ func (s *Server) logRequest(r *http.Request) {
 func (s *Server) getSessionID(r *http.Request) string {
 	// Try to get session ID from header
 	if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
+		log.Printf("DEBUG: Using existing session ID: %s", sessionID)
 		return sessionID
 	}
 
 	// Generate a new session ID
 	bytes := make([]byte, 16)
-	rand.Read(bytes)
-	return hex.EncodeToString(bytes)
+	if _, err := rand.Read(bytes); err != nil {
+		log.Printf("ERROR: Failed to generate random session ID: %v", err)
+		// Fallback to a simple timestamp-based ID
+		return fmt.Sprintf("session-%d", time.Now().UnixNano())
+	}
+
+	sessionID := hex.EncodeToString(bytes)
+	log.Printf("INFO: Generated new session ID: %s", sessionID)
+	return sessionID
 }
 
 // handleHandshakeMessage handles MCP handshake messages (initialize and initialized)
@@ -318,15 +521,23 @@ func (s *Server) handleInitialized(w http.ResponseWriter, sessionID string, msg 
 
 // sendErrorResponse sends a JSON-RPC error response
 func (s *Server) sendErrorResponse(w http.ResponseWriter, id interface{}, code int, message string, isRemoteMCP bool) {
+	log.Printf("ERROR: Sending error response - Code: %d, Message: %s", code, message)
+
 	errorResponse, err := s.translator.CreateErrorResponse(id, code, message, isRemoteMCP)
 	if err != nil {
+		log.Printf("ERROR: Failed to create error response: %v", err)
 		http.Error(w, "Failed to create error response", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write(errorResponse)
+
+	if _, err := w.Write(errorResponse); err != nil {
+		log.Printf("ERROR: Failed to write error response: %v", err)
+	} else {
+		log.Printf("DEBUG: Error response sent successfully")
+	}
 }
 
 // validateAuthentication validates the authentication for the request
