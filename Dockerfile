@@ -18,8 +18,35 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 # Final stage
 FROM alpine:latest
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# Install dependencies for various MCP server types
+RUN apk --no-cache add \
+    ca-certificates \
+    nodejs npm \
+    python3 py3-pip \
+    curl wget \
+    git \
+    bash
+
+# Install uv (fast Python package installer/manager)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# Install common Python tools that MCP servers might need
+RUN pip3 install --no-cache-dir \
+    httpx \
+    aiohttp \
+    requests \
+    pydantic \
+    sqlite-utils \
+    click
+
+# Install common Node.js global packages for MCP servers
+RUN npm install -g \
+    typescript \
+    ts-node
+
+# Create symlinks for common Python commands
+RUN ln -sf /usr/bin/python3 /usr/bin/python
 
 WORKDIR /root/
 
