@@ -22,40 +22,42 @@ FROM alpine:latest
 RUN apk --no-cache add \
     ca-certificates \
     nodejs npm \
-    python3 py3-pip \
+    python3 py3-pip py3-venv \
     curl wget \
     git \
-    bash
+    bash \
+    build-base \
+    sqlite \
+    jq
 
 # Update npm to latest version to ensure npx is available
 RUN npm install -g npm@latest
 
 # Install uv (fast Python package installer/manager)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:$PATH"
+ENV PATH="/root/.local/bin:/root/.cargo/bin:$PATH"
 
-# Install common Python tools that MCP servers might need
+# Create uv symlink for easier access
+RUN ln -sf /root/.local/bin/uv /usr/local/bin/uv 2>/dev/null || true
+
+# Install essential Python tools that MCP servers commonly need
 # Use --break-system-packages for Docker container environment
 RUN pip3 install --no-cache-dir --break-system-packages \
-    httpx \
-    aiohttp \
     requests \
-    pydantic \
-    sqlite-utils \
-    click
+    httpx \
+    pydantic
 
-# Install common Node.js global packages for MCP servers
-RUN npm install -g \
-    typescript \
-    ts-node
+# Install essential Node.js packages for MCP servers
+RUN npm install -g typescript
 
 # Create symlinks for common Python commands
 RUN ln -sf /usr/bin/python3 /usr/bin/python
 
-# Verify installations and create npx fallback if needed
-RUN node --version && npm --version && python --version && uv --version
-RUN npx --version || (echo '#!/bin/sh\nexec npm exec -- "$@"' > /usr/local/bin/npx && chmod +x /usr/local/bin/npx)
+# Verify essential tools and create npx fallback if needed
+RUN node --version && npm --version && python --version
+RUN npx --help >/dev/null 2>&1 || (echo '#!/bin/sh\nexec npm exec -- "$@"' > /usr/local/bin/npx && chmod +x /usr/local/bin/npx)
 RUN npx --version
+RUN echo "Build completed successfully"
 
 WORKDIR /root/
 
