@@ -35,7 +35,8 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.cargo/bin:$PATH"
 
 # Install common Python tools that MCP servers might need
-RUN pip3 install --no-cache-dir \
+# Use --break-system-packages for Docker container environment
+RUN pip3 install --no-cache-dir --break-system-packages \
     httpx \
     aiohttp \
     requests \
