@@ -27,6 +27,9 @@ RUN apk --no-cache add \
     git \
     bash
 
+# Update npm to latest version to ensure npx is available
+RUN npm install -g npm@latest
+
 # Install uv (fast Python package installer/manager)
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.cargo/bin:$PATH"
@@ -47,6 +50,11 @@ RUN npm install -g \
 
 # Create symlinks for common Python commands
 RUN ln -sf /usr/bin/python3 /usr/bin/python
+
+# Verify installations and create npx fallback if needed
+RUN node --version && npm --version && python --version && uv --version
+RUN npx --version || (echo '#!/bin/sh\nexec npm exec -- "$@"' > /usr/local/bin/npx && chmod +x /usr/local/bin/npx)
+RUN npx --version
 
 WORKDIR /root/
 
