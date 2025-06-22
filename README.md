@@ -1,26 +1,26 @@
 # Remote MCP Proxy
 
-A Docker-based proxy service built in Go that enables local MCP (Model Context Protocol) servers to be accessed through Claude's web UI by bridging them with the Remote MCP protocol.
+**Seamlessly use your favorite MCP servers anywhere**. This project packages a small Go proxy that lets you connect local or experimental MCP servers to Claude.ai and the mobile app. Even if a server isn't officially "remote" yet, this proxy exposes it over Claude's new Remote MCP protocol so you can start integrating immediately.
 
-## Problem
+## Why This Exists
 
-Many MCP servers are designed to run locally and aren't compatible with Claude's Remote MCP protocol. This limits their use to desktop applications and prevents access through Claude's web interface.
+Existing MCP servers often run only on your desktop, making them impossible to use with Claude's web UI or phone app. The Remote MCP protocol solves this, but not every server supports it yet. This proxy fills that gap so you can experiment right away.
 
-## Solution
+## How It Works
 
-This proxy service runs in Docker and:
-- Manages local MCP server processes with health monitoring
-- Translates between HTTP/SSE and MCP JSON-RPC protocols
-- Serves multiple MCP servers through different URL paths
-- Uses the same configuration format as Claude Desktop
-- Provides graceful shutdown and process cleanup
-- Includes health check endpoints for monitoring
+Run the proxy in Docker and it will:
+- Launches and monitors your local MCP servers automatically
+- Converts traffic between HTTP/SSE and standard MCP JSON-RPC
+- Hosts several MCP servers at once under different URL paths
+- Reuses the familiar `claude_desktop_config.json` format
+- Shuts down cleanly and cleans up any spawned processes
+- Exposes a `/health` endpoint so you can check status at a glance
 
 ## Quick Start
 
 ### 1. Create Configuration File
 
-Create a `config.json` file with your MCP servers (same format as `claude_desktop_config.json`):
+Create a `config.json` file describing your MCP servers (same format as `claude_desktop_config.json`):
 
 ```json
 {
@@ -77,11 +77,11 @@ This will deploy the service with Traefik reverse proxy integration, making it a
 
 ### 5. Configure Claude.ai
 
-In Claude's web UI, add your remote MCP servers using these URLs:
-- `https://mcp.your-domain.com/notion-mcp/sse`
-- `https://mcp.your-domain.com/memory-mcp/sse`
+Open Claude.ai (or the mobile app) and add your proxy URLs. Example:
+ - `https://mcp.your-domain.com/notion-mcp/sse`
+ - `https://mcp.your-domain.com/memory-mcp/sse`
 
-Replace `your-domain.com` with your actual domain configured in the `.env` file.
+Use the domain you set in `.env`.
 
 ## URL Structure
 
