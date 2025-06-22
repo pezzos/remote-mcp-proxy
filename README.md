@@ -55,28 +55,42 @@ docker run -d \
   remote-mcp-proxy
 ```
 
-### 3. Or Use Docker Compose
+### 3. Setup Environment Variables
+
+Create a `.env` file with your domain configuration:
+
+```bash
+# Copy example file
+cp .env.example .env
+
+# Edit with your domain
+echo "DOMAIN=your-domain.com" > .env
+```
+
+### 4. Use Docker Compose with Traefik
 
 ```bash
 docker-compose up -d
 ```
 
-### 4. Configure Claude.ai
+This will deploy the service with Traefik reverse proxy integration, making it accessible at `mcp.{DOMAIN}` with automatic HTTPS.
+
+### 5. Configure Claude.ai
 
 In Claude's web UI, add your remote MCP servers using these URLs:
-- `https://your-domain.com/notion-mcp/sse`
-- `https://your-domain.com/memory-mcp/sse`
+- `https://mcp.your-domain.com/notion-mcp/sse`
+- `https://mcp.your-domain.com/memory-mcp/sse`
 
-Replace `your-domain.com` with your actual domain where the proxy is hosted.
+Replace `your-domain.com` with your actual domain configured in the `.env` file.
 
 ## URL Structure
 
 Each MCP server is available at:
 ```
-https://your-domain.com/{server-name}/sse
+https://mcp.{DOMAIN}/{server-name}/sse
 ```
 
-Where `{server-name}` matches the key in your `config.json` file.
+Where `{DOMAIN}` is set in your `.env` file and `{server-name}` matches the key in your `config.json` file.
 
 ## Configuration
 
@@ -98,27 +112,49 @@ The proxy uses the same configuration format as Claude Desktop's `claude_desktop
 
 ### Environment Variables
 
-- Set environment variables for your MCP servers in the `env` section
+#### Docker Compose Environment Variables
+
+The following environment variables are used by the Docker Compose setup:
+
+- **`DOMAIN`**: Your base domain name (e.g., `example.com`). The service will be accessible at `mcp.{DOMAIN}`
+
+#### MCP Server Environment Variables
+
+- Set environment variables for your MCP servers in the `env` section of `config.json`
 - Store secrets securely and reference them in your Docker deployment
 - The proxy will pass these environment variables to the spawned MCP processes
 
-## Docker Compose
+## Docker Compose with Traefik
 
-For easier deployment, use Docker Compose:
+The service is configured to work with Traefik reverse proxy for automatic HTTPS and domain routing:
 
 ```yaml
 version: '3.8'
 services:
   remote-mcp-proxy:
     build: .
-    ports:
-      - "8080:8080"
+    container_name: remote-mcp-proxy
+    restart: unless-stopped
     volumes:
       - ./config.json:/app/config.json:ro
     environment:
-      - NODE_ENV=production
-    restart: unless-stopped
+      - GO_ENV=production
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.remote-mcp-proxy.rule=Host(`mcp.${DOMAIN}`)
+      - traefik.http.routers.remote-mcp-proxy.entrypoints=websecure
+      - traefik.http.routers.remote-mcp-proxy.tls.certresolver=myresolver
+networks:
+  proxy:
+    external: true
 ```
+
+Make sure to:
+1. Create a `.env` file with your `DOMAIN` variable
+2. Have Traefik running with the `proxy` network
+3. Configure SSL certificate resolver in Traefik
 
 ## Development
 

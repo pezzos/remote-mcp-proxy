@@ -3,15 +3,31 @@ version: '3.8'
 services:
   remote-mcp-proxy:
     build: .
-    ports:
-      - "8080:8080"
+    container_name: remote-mcp-proxy
+    restart: unless-stopped
     volumes:
       - ./config.json:/app/config.json:ro
     environment:
       - GO_ENV=production
-    restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.remote-mcp-proxy.rule=Host(`mcp.${DOMAIN}`)
+      - traefik.http.routers.remote-mcp-proxy.entrypoints=websecure
+      - traefik.http.routers.remote-mcp-proxy.tls.certresolver=myresolver
+      - traefik.http.services.remote-mcp-proxy.loadbalancer.server.port=8080
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+
+networks:
+  proxy:
+    external: true
