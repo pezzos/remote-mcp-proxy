@@ -22,7 +22,7 @@ FROM alpine:latest
 RUN apk --no-cache add \
     ca-certificates \
     nodejs npm \
-    python3 py3-pip py3-venv \
+    python3 py3-pip \
     curl wget \
     git \
     bash \
