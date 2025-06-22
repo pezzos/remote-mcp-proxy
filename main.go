@@ -18,7 +18,11 @@ func main() {
 	log.Println("Starting Remote MCP Proxy...")
 
 	// Load configuration
-	cfg, err := config.Load("/app/config.json")
+	configPath := os.Getenv("CONFIG_FILE")
+	if configPath == "" {
+		configPath = "/app/config.json"
+	}
+	cfg, err := config.Load(configPath)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}

@@ -4,9 +4,10 @@ services:
     container_name: remote-mcp-proxy
     restart: unless-stopped
     volumes:
-      - ${CONFIG_PATH:-./config.json}:/app/config.json:ro
+      - ${CONFIG_PATH:-./config.json}:/config/config.json:ro
     environment:
       - GO_ENV=production
+      - CONFIG_FILE=/config/config.json
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 30s

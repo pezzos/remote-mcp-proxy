@@ -26,8 +26,8 @@ WORKDIR /root/
 # Copy the binary from builder stage
 COPY --from=builder /app/main .
 
-# Create directory for config
-RUN mkdir -p /app
+# Create directories for config (config.json will be mounted at runtime)
+RUN mkdir -p /app /config
 
 # Expose port
 EXPOSE 8080
