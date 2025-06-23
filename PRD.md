@@ -236,13 +236,47 @@ services:
 - Add authentication for Remote MCP endpoints if required
 - Secure handling of secrets in environment variables
 
+## Remote MCP Protocol Requirements ❌ **CRITICAL FIXES NEEDED**
+
+Based on the official MCP specification and Claude.ai integration documentation, our current implementation has several critical issues:
+
+### Missing Required Features
+1. **Endpoint Event**: SSE connections must send an "endpoint" event with session URI
+2. **Session Management**: Missing Mcp-Session-Id header support for stateful sessions
+3. **Message Format**: Not using proper Remote MCP message structure
+4. **Protocol Translation**: Initialize request forwarding needs session context
+5. **Resource/Prompt Support**: Only implementing tools, missing resources and prompts
+
+### Current Implementation Issues
+- SSE connection sends "connected" event instead of required "endpoint" event
+- No session URL provided to Claude for bidirectional communication
+- Missing proper Remote MCP message wrapper format
+- Initialize handshake doesn't establish proper session state
+- Tools showing as empty `{}` instead of actual tool definitions
+
+### Required Remote MCP Protocol Flow
+1. **SSE Connection**: Send "endpoint" event with session URI for client messages
+2. **Initialize Handshake**: Forward to MCP server and return actual capabilities
+3. **Session Management**: Track session IDs and maintain state
+4. **Bidirectional Communication**: Support POST messages to session endpoint
+5. **Tool/Resource/Prompt Discovery**: Properly expose server capabilities
+
+### Reference Implementation Requirements
+According to official documentation:
+- Support both SSE and Streamable HTTP transports
+- Implement Dynamic Client Registration for OAuth
+- Send proper "endpoint" event for client-to-server messaging
+- Support tools, prompts, and resources (not just tools)
+- Maintain session state with secure session IDs
+
 ## Success Criteria
 
-1. **Functional**: Any local MCP server can be accessed through Claude.ai web UI
-2. **Reliable**: Proxy handles process failures and restarts gracefully
-3. **Performant**: Low latency translation between protocols
-4. **Secure**: Safe execution of configured MCP servers
-5. **Maintainable**: Easy to deploy and configure via Docker
+1. **Functional**: Any local MCP server can be accessed through Claude.ai web UI ❌ **NOT MET**
+2. **Reliable**: Proxy handles process failures and restarts gracefully ✅ **MET**
+3. **Performant**: Low latency translation between protocols ✅ **MET**
+4. **Secure**: Safe execution of configured MCP servers ✅ **MET**
+5. **Maintainable**: Easy to deploy and configure via Docker ✅ **MET**
+6. **Protocol Compliant**: Follows Remote MCP specification exactly ❌ **NOT MET**
 
 ## Future Enhancements
 

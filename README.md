@@ -77,11 +77,17 @@ This will deploy the service with Traefik reverse proxy integration, making it a
 
 ### 5. Configure Claude.ai
 
-Open Claude.ai (or the mobile app) and add your proxy URLs. Example:
+Open Claude.ai (requires Pro, Max, Teams, or Enterprise plan) and add your proxy URLs under Settings > Integrations:
+
+**Important**: Use these exact URLs for Claude integration:
  - `https://mcp.your-domain.com/notion-mcp/sse`
  - `https://mcp.your-domain.com/memory-mcp/sse`
 
-Use the domain you set in `.env`.
+**Note**: Our current implementation has known issues with Claude.ai integration. The proxy correctly forwards MCP server capabilities but Claude may still show integrations as "disabled". This is due to missing Remote MCP protocol requirements that are being addressed in upcoming releases.
+
+**Workaround**: Use the debug endpoints to verify your MCP servers are working:
+- Check server status: `https://mcp.your-domain.com/listmcp`
+- Verify tools available: `https://mcp.your-domain.com/listtools/your-server-name`
 
 ## URL Structure
 
