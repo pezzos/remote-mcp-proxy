@@ -216,6 +216,17 @@ services:
     environment:
       - GO_ENV=production
 ```
+## Docker Setup Improvement Opportunities
+
+- **Pin Base Images**: Use fixed versions for `golang` and `alpine` instead of `latest` to ensure repeatable builds and controlled security updates.
+- **Non-Root User**: Create a dedicated `mcp` user and switch to it using the `USER` directive to minimize container privileges.
+- **Remove Build Tools**: Move heavy packages like `build-base` to the builder stage or uninstall them after setup so the runtime image stays small.
+- **Dockerfile Healthcheck**: Add a `HEALTHCHECK` instruction mirroring the compose health check for standalone deployments.
+- **Drop Capabilities**: In `docker-compose.yml`, add `cap_drop: [ALL]` and `security_opt: no-new-privileges:true` to harden the container.
+- **Read-Only Filesystem**: Mount configuration as read-only and set the root filesystem to `read_only: true` with `tmpfs` for writable paths.
+- **Explicit Image Versions**: Tag the built image and reference it via the `image` field in Compose so deployments use a known version.
+- **Multi-Stage Caching**: Leverage Docker layer caching for Node and Python package installation to speed up local builds.
+
 
 ## Security Considerations
 
