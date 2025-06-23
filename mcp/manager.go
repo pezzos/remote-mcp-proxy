@@ -25,6 +25,7 @@ type Server struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	mu      sync.RWMutex
+	readMu  sync.Mutex // Dedicated mutex for stdout reading
 }
 
 // Manager manages multiple MCP server processes
@@ -320,11 +321,17 @@ func (s *Server) SendMessage(message []byte) error {
 
 // ReadMessage reads a JSON-RPC message from the MCP server with context timeout
 func (s *Server) ReadMessage(ctx context.Context) ([]byte, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	// Use dedicated read mutex to prevent concurrent stdout reads
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
 
-	if s.Stdout == nil {
-		log.Printf("ERROR: Server %s not running, cannot read message", s.Name)
+	s.mu.RLock()
+	stdout := s.Stdout
+	serverName := s.Name
+	s.mu.RUnlock()
+
+	if stdout == nil {
+		log.Printf("ERROR: Server %s not running, cannot read message", serverName)
 		return nil, fmt.Errorf("server not running")
 	}
 
@@ -343,19 +350,19 @@ func (s *Server) ReadMessage(ctx context.Context) ([]byte, error) {
 			}
 		}()
 
-		scanner := bufio.NewScanner(s.Stdout)
+		scanner := bufio.NewScanner(stdout)
 		if scanner.Scan() {
 			data := make([]byte, len(scanner.Bytes()))
 			copy(data, scanner.Bytes())
-			log.Printf("DEBUG: Read message from server %s: %s", s.Name, string(data))
+			log.Printf("DEBUG: Read message from server %s: %s", serverName, string(data))
 			resultChan <- readResult{data, nil}
 		} else {
 			scanErr := scanner.Err()
 			if scanErr != nil {
-				log.Printf("ERROR: Scanner error for server %s: %v", s.Name, scanErr)
+				log.Printf("ERROR: Scanner error for server %s: %v", serverName, scanErr)
 				resultChan <- readResult{nil, scanErr}
 			} else {
-				log.Printf("DEBUG: EOF reached for server %s", s.Name)
+				log.Printf("DEBUG: EOF reached for server %s", serverName)
 				resultChan <- readResult{nil, io.EOF}
 			}
 		}
@@ -365,13 +372,13 @@ func (s *Server) ReadMessage(ctx context.Context) ([]byte, error) {
 	select {
 	case result := <-resultChan:
 		if result.err != nil && result.err != io.EOF {
-			log.Printf("ERROR: Failed to read message from server %s: %v", s.Name, result.err)
+			log.Printf("ERROR: Failed to read message from server %s: %v", serverName, result.err)
 		} else if result.err == nil {
-			log.Printf("INFO: Successfully read message from server %s", s.Name)
+			log.Printf("INFO: Successfully read message from server %s", serverName)
 		}
 		return result.data, result.err
 	case <-ctx.Done():
-		log.Printf("WARNING: ReadMessage timeout/cancellation for server %s: %v", s.Name, ctx.Err())
+		log.Printf("WARNING: ReadMessage timeout/cancellation for server %s: %v", serverName, ctx.Err())
 		return nil, ctx.Err()
 	}
 }

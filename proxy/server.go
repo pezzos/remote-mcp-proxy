@@ -789,36 +789,79 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 
-	// Store connection state in translator first (before sending to MCP server)
-	_, err = s.translator.HandleInitialize(sessionID, params)
-	if err != nil {
-		log.Printf("ERROR: Failed to store connection state: %v", err)
-		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to initialize session", false)
-		return
-	}
-
-	// Track the initialize request for async handling
-	s.translator.TrackRequest(sessionID, msg.ID, msg.Method)
-
-	// Send initialize request to MCP server (async)
+	// Send initialize request to MCP server
 	if err := mcpServer.SendMessage(initRequestBytes); err != nil {
 		log.Printf("ERROR: Failed to send initialize request to MCP server %s: %v", mcpServer.Name, err)
 		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to communicate with MCP server", false)
 		return
 	}
 
-	log.Printf("INFO: Initialize request sent to MCP server %s, will respond via SSE", mcpServer.Name)
+	// Read the initialize response from MCP server with timeout
+	log.Printf("INFO: Waiting for initialize response from MCP server %s...", mcpServer.Name)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	// Return HTTP 202 Accepted immediately - response will come via SSE
+	// Use a dedicated read goroutine to avoid stdio deadlock
+	type readResult struct {
+		data []byte
+		err  error
+	}
+
+	readChan := make(chan readResult, 1)
+	go func() {
+		data, err := mcpServer.ReadMessage(ctx)
+		readChan <- readResult{data, err}
+	}()
+
+	var responseBytes []byte
+	select {
+	case result := <-readChan:
+		if result.err != nil {
+			log.Printf("ERROR: Failed to read initialize response from MCP server %s: %v", mcpServer.Name, result.err)
+			s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to receive response from MCP server", false)
+			return
+		}
+		responseBytes = result.data
+	case <-time.After(30 * time.Second):
+		log.Printf("ERROR: Timeout waiting for initialize response from MCP server %s", mcpServer.Name)
+		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Timeout waiting for MCP server response", false)
+		return
+	}
+
+	// Parse the MCP server's initialize response
+	var mcpResponse protocol.JSONRPCMessage
+	if err := json.Unmarshal(responseBytes, &mcpResponse); err != nil {
+		log.Printf("ERROR: Failed to parse initialize response from MCP server %s: %v", mcpServer.Name, err)
+		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Invalid response from MCP server", false)
+		return
+	}
+
+	// Store connection state in translator
+	if mcpResponse.Result != nil {
+		_, err := s.translator.HandleInitialize(sessionID, params)
+		if err != nil {
+			log.Printf("ERROR: Failed to store connection state: %v", err)
+		} else {
+			// Mark session as initialized immediately after successful initialize response
+			err := s.translator.HandleInitialized(sessionID)
+			if err != nil {
+				log.Printf("ERROR: Failed to mark session as initialized: %v", err)
+			} else {
+				log.Printf("INFO: Session %s marked as initialized for server %s", sessionID, mcpServer.Name)
+			}
+		}
+	}
+
+	// Return the MCP server's response directly to Claude
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Session-ID", sessionID)
 	w.Header().Set("Mcp-Session-Id", sessionID)
-	w.WriteHeader(http.StatusAccepted)
+	w.WriteHeader(http.StatusOK)
 
-	if _, err := w.Write([]byte(`{"status":"accepted","message":"Initialize request sent, response will be delivered via SSE"}`)); err != nil {
-		log.Printf("ERROR: Failed to write initialize acceptance response: %v", err)
+	if _, err := w.Write(responseBytes); err != nil {
+		log.Printf("ERROR: Failed to write initialize response: %v", err)
 	} else {
-		log.Printf("INFO: Initialize request accepted for MCP server %s, session %s", mcpServer.Name, sessionID)
+		log.Printf("INFO: Forwarded initialize response from MCP server %s for session %s", mcpServer.Name, sessionID)
 	}
 }
 
