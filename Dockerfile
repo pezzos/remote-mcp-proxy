@@ -22,7 +22,7 @@ FROM alpine:latest
 RUN apk --no-cache add \
     ca-certificates \
     nodejs npm \
-    python3 py3-pip py3-venv \
+    python3 py3-pip \
     curl wget \
     git \
     bash \
@@ -63,6 +63,9 @@ WORKDIR /root/
 
 # Copy the binary from builder stage
 COPY --from=builder /app/main .
+
+# Copy configuration file
+COPY config.json /app/config.json
 
 # Create directories for config (config.json will be mounted at runtime)
 RUN mkdir -p /app /config
