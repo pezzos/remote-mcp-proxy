@@ -496,6 +496,34 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 				continue
 			}
 
+			// Check for timed-out requests first (3 second timeout)
+			timeoutMessages := s.translator.CheckTimeouts(sessionID, 3*time.Second)
+			for _, timeoutMessage := range timeoutMessages {
+				log.Printf("INFO: Sending timeout fallback response for server %s", mcpServer.Name)
+
+				// Translate and send timeout fallback message
+				remoteMCPMessage, err := s.translator.MCPToRemote(timeoutMessage)
+				if err != nil {
+					log.Printf("ERROR: Error translating timeout fallback message for server %s: %v", mcpServer.Name, err)
+					continue
+				}
+
+				// Write SSE event for timeout fallback
+				if _, err := fmt.Fprintf(w, "event: message\n"); err != nil {
+					log.Printf("ERROR: Failed to write SSE event header for timeout fallback for server %s: %v", mcpServer.Name, err)
+					return
+				}
+
+				if _, err := fmt.Fprintf(w, "data: %s\n\n", string(remoteMCPMessage)); err != nil {
+					log.Printf("ERROR: Failed to write SSE data for timeout fallback for server %s: %v", mcpServer.Name, err)
+					return
+				}
+
+				if flusher, ok := w.(http.Flusher); ok {
+					flusher.Flush()
+				}
+			}
+
 			// Create a timeout context for reading messages
 			readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
 

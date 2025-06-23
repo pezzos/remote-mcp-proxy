@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // JSONRPCMessage represents a JSON-RPC 2.0 message
@@ -59,13 +60,19 @@ type ServerInfo struct {
 	Version string `json:"version"`
 }
 
+// PendingRequest tracks a request waiting for a response
+type PendingRequest struct {
+	Method    string
+	Timestamp time.Time
+}
+
 // ConnectionState tracks the state of an MCP connection
 type ConnectionState struct {
 	Initialized     bool
 	ProtocolVersion string
 	Capabilities    map[string]interface{}
 	SessionID       string
-	PendingRequests map[interface{}]string // Maps request ID to method
+	PendingRequests map[interface{}]*PendingRequest // Maps request ID to request info
 }
 
 // Translator handles protocol translation between Remote MCP and local MCP
@@ -203,7 +210,7 @@ func (t *Translator) HandleInitialize(sessionID string, params InitializeParams)
 		ProtocolVersion: MCPProtocolVersion,
 		Capabilities:    make(map[string]interface{}),
 		SessionID:       sessionID,
-		PendingRequests: make(map[interface{}]string),
+		PendingRequests: make(map[interface{}]*PendingRequest),
 	}
 
 	// Set basic capabilities for proxy
@@ -323,7 +330,10 @@ func (t *Translator) TrackRequest(sessionID string, requestID interface{}, metho
 	defer t.mu.Unlock()
 
 	if state, exists := t.connections[sessionID]; exists {
-		state.PendingRequests[requestID] = method
+		state.PendingRequests[requestID] = &PendingRequest{
+			Method:    method,
+			Timestamp: time.Now(),
+		}
 	}
 }
 
@@ -333,9 +343,9 @@ func (t *Translator) GetAndClearPendingMethod(sessionID string, requestID interf
 	defer t.mu.Unlock()
 
 	if state, exists := t.connections[sessionID]; exists {
-		if method, found := state.PendingRequests[requestID]; found {
+		if request, found := state.PendingRequests[requestID]; found {
 			delete(state.PendingRequests, requestID)
-			return method, true
+			return request.Method, true
 		}
 	}
 	return "", false
@@ -366,4 +376,38 @@ func (t *Translator) HandleMethodNotFoundError(sessionID string, response []byte
 	}
 
 	return fallbackResponse, true
+}
+
+// CheckTimeouts checks for timed-out requests and generates fallback responses
+func (t *Translator) CheckTimeouts(sessionID string, timeoutDuration time.Duration) [][]byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var fallbackMessages [][]byte
+
+	state, exists := t.connections[sessionID]
+	if !exists {
+		return fallbackMessages
+	}
+
+	now := time.Now()
+	var expiredRequests []interface{}
+
+	// Find expired requests
+	for requestID, request := range state.PendingRequests {
+		if now.Sub(request.Timestamp) > timeoutDuration && t.ShouldProvideFallback(request.Method) {
+			expiredRequests = append(expiredRequests, requestID)
+		}
+	}
+
+	// Generate fallback responses for expired requests
+	for _, requestID := range expiredRequests {
+		request := state.PendingRequests[requestID]
+		if fallbackResponse, err := t.CreateFallbackResponse(requestID, request.Method); err == nil {
+			fallbackMessages = append(fallbackMessages, fallbackResponse)
+		}
+		delete(state.PendingRequests, requestID)
+	}
+
+	return fallbackMessages
 }
