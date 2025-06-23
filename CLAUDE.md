@@ -61,6 +61,7 @@ When making significant changes to the codebase, automatically update the follow
 
 1. **README.md**: Update to reflect current implementation status, features, and architecture
 2. **PRD.md**: Mark phases as completed when implementation is finished, update progress tracking
+3. **CHANGELOG.md**: Document all changes following semantic versioning and Keep a Changelog format
 
 ### Update Triggers
 Automatically update documentation when:
@@ -69,6 +70,120 @@ Automatically update documentation when:
 - Changing architecture or core components
 - Modifying configuration format or deployment process
 - Adding new development commands or processes
+- Fixing bugs or security issues
+- Making breaking changes
+
+### CHANGELOG.md Management Protocol
+
+**MANDATORY**: For every feature completion or significant change, follow this exact process:
+
+#### 1. Update CHANGELOG.md Entry Format
+```markdown
+## [Unreleased]
+
+### Added
+- **Feature Name**: Brief description of what was added
+- **Enhancement**: Description of improvement with context
+
+### Fixed  
+- **Bug Description**: What was broken and how it was fixed
+- **Issue Reference**: Link to issue if applicable
+
+### Changed
+- **Component**: What was modified and why
+- **Breaking Change**: Mark breaking changes clearly
+
+### Security
+- **Security Fix**: Description of security improvement
+```
+
+#### 2. Commit Preparation Process
+**ALWAYS follow this sequence:**
+
+1. **Update Documentation**:
+   - Update README.md if features/architecture changed
+   - Update PRD.md progress tracking if phases completed
+   - Update CHANGELOG.md with all changes made
+
+2. **Pre-Commit Checks**:
+   ```bash
+   # Format and validate code
+   go fmt ./...
+   go vet ./...
+   go build -o remote-mcp-proxy .
+   ./test/run-tests.sh
+   ```
+
+3. **Prepare Commit**:
+   - Stage all changes including documentation updates
+   - Use conventional commit format: `type(scope): description`
+   - Include CHANGELOG.md in the same commit as the feature
+
+#### 3. Commit Message Convention
+Use this exact format:
+```
+type(scope): brief description
+
+- Updated CHANGELOG.md with [feature/fix/change] details
+- [Additional context if needed]
+
+🤖 Generated with Claude Code
+```
+
+**Commit Types:**
+- `feat`: New feature
+- `fix`: Bug fix  
+- `docs`: Documentation only
+- `refactor`: Code refactoring
+- `perf`: Performance improvement
+- `test`: Adding/updating tests
+- `chore`: Maintenance tasks
+
+#### 4. Automated Commit Creation
+**When ready to commit, always run this sequence:**
+
+```bash
+# Add all changes including documentation
+git add .
+
+# Create commit with proper message
+git commit -m "$(cat <<'EOF'
+type(scope): [FEATURE/FIX DESCRIPTION]
+
+- Updated CHANGELOG.md with [change type] details
+- [Brief description of main changes]
+- [Any breaking changes or migration notes]
+
+🤖 Generated with Claude Code
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+EOF
+)"
+
+# Verify commit is ready (but don't push - user handles that)
+git status
+```
+
+#### 5. Version Tagging Guidelines
+When a release is ready:
+- Move entries from `[Unreleased]` to `[version] - date`
+- Follow semantic versioning (MAJOR.MINOR.PATCH)
+- Create git tag: `git tag v1.2.0`
+
+#### 6. Breaking Change Documentation
+For breaking changes, always include:
+- **Migration Guide**: Step-by-step upgrade instructions
+- **Deprecation Notice**: What's being removed and timeline
+- **Alternative Approach**: Recommended new method
+
+**Example Breaking Change Entry:**
+```markdown
+### Changed
+- **BREAKING**: Session management now requires `Mcp-Session-Id` header
+  - **Migration**: Update client code to include session header
+  - **Timeline**: Legacy support removed in v2.0.0
+  - **Alternative**: Use new session-based authentication flow
+```
 
 ## Error Handling and Logging Requirements
 
