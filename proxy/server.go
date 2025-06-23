@@ -258,6 +258,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 		"jsonrpc": "2.0",
 		"id":      fmt.Sprintf("listtools-%d", time.Now().UnixNano()),
 		"method":  "tools/list",
+		"params":  map[string]interface{}{}, // MCP protocol requires params field
 	}
 
 	requestBytes, err := json.Marshal(toolsListRequest)
@@ -280,8 +281,8 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Read the response with a timeout
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	// Read the response with a timeout - increased to match initialize timeout
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
 	responseBytes, err := mcpServer.ReadMessage(ctx)
@@ -297,33 +298,55 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse the response to extract tools information
-	var mcpResponse map[string]interface{}
-	if err := json.Unmarshal(responseBytes, &mcpResponse); err != nil {
-		log.Printf("ERROR: Failed to parse tools/list response from server %s: %v", serverName, err)
+	// CRITICAL FIX: Apply tool name normalization for Claude.ai compatibility
+	//
+	// The raw MCP response contains tool names in their original format (e.g., "API-get-user")
+	// but Claude.ai expects normalized snake_case names (e.g., "api_get_user").
+	// 
+	// We must apply the same normalization that the regular MCP message flow uses
+	// to ensure consistency between /listtools endpoint and SSE connections.
+	//
+	// DO NOT RETURN RAW RESPONSE - this breaks Claude.ai tool discovery
+	normalizedResponse, err := s.translator.MCPToRemote(responseBytes)
+	if err != nil {
+		log.Printf("ERROR: Failed to normalize tools/list response from server %s: %v", serverName, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":   "parse_failed",
-			"message": fmt.Sprintf("Failed to parse response from MCP server: %v", err),
+			"error":   "normalization_failed",
+			"message": fmt.Sprintf("Failed to normalize response from MCP server: %v", err),
 			"server":  serverName,
 		})
 		return
 	}
 
-	// Return the tools information
+	// Parse the normalized response
+	var normalizedMCPResponse map[string]interface{}
+	if err := json.Unmarshal(normalizedResponse, &normalizedMCPResponse); err != nil {
+		log.Printf("ERROR: Failed to parse normalized tools/list response from server %s: %v", serverName, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "parse_failed",
+			"message": fmt.Sprintf("Failed to parse normalized response from MCP server: %v", err),
+			"server":  serverName,
+		})
+		return
+	}
+
+	// Return the normalized tools information with Claude.ai compatible tool names
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 
 	response := map[string]interface{}{
 		"server":   serverName,
-		"response": mcpResponse,
+		"response": normalizedMCPResponse,
 	}
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("ERROR: Failed to encode listtools response: %v", err)
 	} else {
-		log.Printf("INFO: Successfully returned tools list for server %s", serverName)
+		log.Printf("INFO: Successfully returned normalized tools list for server %s", serverName)
 	}
 }
 
