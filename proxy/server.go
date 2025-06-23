@@ -665,9 +665,15 @@ func (s *Server) logRequest(r *http.Request) {
 
 // getSessionID generates or retrieves a session ID for the request
 func (s *Server) getSessionID(r *http.Request) string {
-	// Try to get session ID from header
+	// Try to get session ID from Remote MCP standard header
+	if sessionID := r.Header.Get("Mcp-Session-Id"); sessionID != "" {
+		log.Printf("DEBUG: Using existing session ID from Mcp-Session-Id header: %s", sessionID)
+		return sessionID
+	}
+	
+	// Try to get session ID from legacy header for backward compatibility
 	if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
-		log.Printf("DEBUG: Using existing session ID: %s", sessionID)
+		log.Printf("DEBUG: Using existing session ID from X-Session-ID header: %s", sessionID)
 		return sessionID
 	}
 
