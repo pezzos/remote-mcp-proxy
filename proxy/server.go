@@ -326,63 +326,114 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	serverName := vars["server"]
 
-	log.Printf("Handling MCP request for server: %s", serverName)
+	// Comprehensive request logging
+	log.Printf("=== MCP REQUEST START ===")
+	log.Printf("INFO: Method: %s, URL: %s, Server: %s", r.Method, r.URL.String(), serverName)
+	log.Printf("INFO: Remote Address: %s", r.RemoteAddr)
+	log.Printf("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
+	log.Printf("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
+	log.Printf("INFO: Accept: %s", r.Header.Get("Accept"))
+	log.Printf("INFO: Origin: %s", r.Header.Get("Origin"))
+	log.Printf("INFO: Authorization: %s", func() string {
+		auth := r.Header.Get("Authorization")
+		if auth != "" {
+			if len(auth) > 20 {
+				return auth[:20] + "..."
+			}
+			return auth
+		}
+		return "none"
+	}())
+	
+	// Log all headers starting with X- or Mcp-
+	for name, values := range r.Header {
+		if strings.HasPrefix(strings.ToLower(name), "x-") || strings.HasPrefix(strings.ToLower(name), "mcp-") {
+			log.Printf("INFO: Header %s: %v", name, values)
+		}
+	}
 
 	// Validate authentication
+	log.Printf("INFO: Validating authentication...")
 	if !s.validateAuthentication(r) {
+		log.Printf("ERROR: Authentication failed for request from %s", r.RemoteAddr)
+		log.Printf("=== MCP REQUEST END (AUTH FAILED) ===")
 		http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		return
 	}
+	log.Printf("SUCCESS: Authentication passed")
 
 	// Get the MCP server
+	log.Printf("INFO: Looking up MCP server: %s", serverName)
 	mcpServer, exists := s.mcpManager.GetServer(serverName)
 	if !exists {
+		log.Printf("ERROR: MCP server '%s' not found", serverName)
+		log.Printf("=== MCP REQUEST END (SERVER NOT FOUND) ===")
 		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
 		return
 	}
+	log.Printf("SUCCESS: Found MCP server: %s (running: %v)", serverName, mcpServer.IsRunning())
 
 	// Handle based on request method
+	log.Printf("INFO: Handling request method: %s", r.Method)
 	switch r.Method {
 	case "GET":
+		log.Printf("INFO: Starting SSE connection handling...")
 		s.handleSSEConnection(w, r, mcpServer)
+		log.Printf("=== MCP REQUEST END (SSE) ===")
 	case "POST":
+		log.Printf("INFO: Starting POST message handling...")
 		s.handleMCPMessage(w, r, mcpServer)
+		log.Printf("=== MCP REQUEST END (POST) ===")
 	default:
+		log.Printf("ERROR: Method not allowed: %s", r.Method)
+		log.Printf("=== MCP REQUEST END (METHOD NOT ALLOWED) ===")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 // handleSSEConnection establishes a Server-Sent Events connection
 func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcpServer *mcp.Server) {
+	log.Printf("=== SSE CONNECTION START ===")
+	log.Printf("INFO: Setting up SSE connection for server: %s", mcpServer.Name)
+	
 	// Get or generate session ID
 	sessionID := s.getSessionID(r)
+	log.Printf("INFO: Session ID for SSE connection: %s", sessionID)
 
 	// Create cancellable context for this connection
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
 	// Check connection limits and add to manager
+	log.Printf("INFO: Adding connection to manager...")
 	if err := s.connectionManager.AddConnection(sessionID, mcpServer.Name, ctx, cancel); err != nil {
 		log.Printf("ERROR: Failed to add connection for session %s: %v", sessionID, err)
+		log.Printf("=== SSE CONNECTION END (CONNECTION LIMIT) ===")
 		http.Error(w, "Too many connections", http.StatusTooManyRequests)
 		return
 	}
+	log.Printf("SUCCESS: Connection added to manager")
 
 	// Set SSE headers
+	log.Printf("INFO: Setting SSE headers...")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Session-ID", sessionID)
+	log.Printf("SUCCESS: SSE headers set")
 
 	// Send required "endpoint" event for Remote MCP protocol
+	log.Printf("INFO: Sending endpoint event...")
 	if _, err := fmt.Fprintf(w, "event: endpoint\n"); err != nil {
 		log.Printf("ERROR: Failed to write SSE endpoint event: %v", err)
+		log.Printf("=== SSE CONNECTION END (ENDPOINT EVENT FAILED) ===")
 		s.connectionManager.RemoveConnection(sessionID)
 		return
 	}
 
 	// Construct the session endpoint URL that Claude will use for sending messages
+	log.Printf("INFO: Constructing session endpoint URL...")
 	scheme := "https"
 	if r.Header.Get("X-Forwarded-Proto") == "" {
 		scheme = "http"
@@ -393,17 +444,28 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	}
 	
 	sessionEndpoint := fmt.Sprintf("%s://%s/%s/sessions/%s", scheme, host, mcpServer.Name, sessionID)
+	log.Printf("INFO: Session endpoint URL: %s", sessionEndpoint)
 	
 	endpointData := map[string]interface{}{
 		"uri": sessionEndpoint,
 	}
 	
-	endpointJSON, _ := json.Marshal(endpointData)
-	if _, err := fmt.Fprintf(w, "data: %s\n\n", string(endpointJSON)); err != nil {
-		log.Printf("ERROR: Failed to write SSE endpoint data: %v", err)
+	endpointJSON, err := json.Marshal(endpointData)
+	if err != nil {
+		log.Printf("ERROR: Failed to marshal endpoint data: %v", err)
+		log.Printf("=== SSE CONNECTION END (ENDPOINT JSON FAILED) ===")
 		s.connectionManager.RemoveConnection(sessionID)
 		return
 	}
+	
+	log.Printf("INFO: Endpoint data: %s", string(endpointJSON))
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", string(endpointJSON)); err != nil {
+		log.Printf("ERROR: Failed to write SSE endpoint data: %v", err)
+		log.Printf("=== SSE CONNECTION END (ENDPOINT DATA FAILED) ===")
+		s.connectionManager.RemoveConnection(sessionID)
+		return
+	}
+	log.Printf("SUCCESS: Endpoint event sent successfully")
 
 	// Flush to send the event immediately
 	if flusher, ok := w.(http.Flusher); ok {
@@ -486,28 +548,46 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 
 // handleMCPMessage handles POST requests with MCP messages
 func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpServer *mcp.Server) {
+	log.Printf("=== MCP MESSAGE START ===")
+	log.Printf("INFO: Processing POST message for server: %s", mcpServer.Name)
+	
 	// Read the request body
+	log.Printf("INFO: Reading request body...")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		log.Printf("ERROR: Failed to read request body: %v", err)
+		log.Printf("=== MCP MESSAGE END (BODY READ FAILED) ===")
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
+	log.Printf("SUCCESS: Request body read (%d bytes)", len(body))
+	log.Printf("INFO: Request body: %s", string(body))
 
 	// Parse the JSON-RPC message to check if it's a handshake message
+	log.Printf("INFO: Parsing JSON-RPC message...")
 	var jsonrpcMsg protocol.JSONRPCMessage
 	if err := json.Unmarshal(body, &jsonrpcMsg); err != nil {
+		log.Printf("ERROR: Invalid JSON-RPC message: %v", err)
+		log.Printf("=== MCP MESSAGE END (JSON PARSE FAILED) ===")
 		http.Error(w, fmt.Sprintf("Invalid JSON-RPC message: %v", err), http.StatusBadRequest)
 		return
 	}
+	log.Printf("SUCCESS: JSON-RPC message parsed")
+	log.Printf("INFO: Method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
 
 	// Generate or get session ID
 	sessionID := s.getSessionID(r)
+	log.Printf("INFO: Session ID: %s", sessionID)
 
 	// Handle handshake messages
+	log.Printf("INFO: Checking if handshake message...")
 	if s.translator.IsHandshakeMessage(jsonrpcMsg.Method) {
+		log.Printf("INFO: Processing handshake message: %s", jsonrpcMsg.Method)
 		s.handleHandshakeMessage(w, r, sessionID, &jsonrpcMsg, mcpServer)
+		log.Printf("=== MCP MESSAGE END (HANDSHAKE) ===")
 		return
 	}
+	log.Printf("INFO: Not a handshake message, continuing with regular processing")
 
 	// Check if connection is initialized
 	if !s.translator.IsInitialized(sessionID) {
@@ -710,7 +790,12 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	serverName := vars["server"]
 	sessionID := vars["sessionId"]
 
+	log.Printf("=== SESSION MESSAGE START ===")
 	log.Printf("INFO: Handling session message for server: %s, session: %s", serverName, sessionID)
+	log.Printf("INFO: Method: %s, URL: %s", r.Method, r.URL.String())
+	log.Printf("INFO: Remote Address: %s", r.RemoteAddr)
+	log.Printf("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
+	log.Printf("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
 
 	// Validate authentication
 	if !s.validateAuthentication(r) {
@@ -732,18 +817,28 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read the request body
+	log.Printf("INFO: Reading session message body...")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		log.Printf("ERROR: Failed to read session message body: %v", err)
+		log.Printf("=== SESSION MESSAGE END (BODY READ FAILED) ===")
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
+	log.Printf("SUCCESS: Session message body read (%d bytes)", len(body))
+	log.Printf("INFO: Session message body: %s", string(body))
 
 	// Parse the JSON-RPC message
+	log.Printf("INFO: Parsing session message JSON-RPC...")
 	var jsonrpcMsg protocol.JSONRPCMessage
 	if err := json.Unmarshal(body, &jsonrpcMsg); err != nil {
+		log.Printf("ERROR: Invalid session message JSON-RPC: %v", err)
+		log.Printf("=== SESSION MESSAGE END (JSON PARSE FAILED) ===")
 		http.Error(w, fmt.Sprintf("Invalid JSON-RPC message: %v", err), http.StatusBadRequest)
 		return
 	}
+	log.Printf("SUCCESS: Session message JSON-RPC parsed")
+	log.Printf("INFO: Session message method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
 
 	// Forward message to MCP server
 	if err := mcpServer.SendMessage(body); err != nil {

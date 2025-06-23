@@ -298,12 +298,24 @@ func (s *Server) SendMessage(message []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	log.Printf("=== MCP SEND MESSAGE START (Server: %s) ===", s.Name)
+	log.Printf("DEBUG: Sending message to server %s: %s", s.Name, string(message))
+
 	if s.Stdin == nil {
+		log.Printf("ERROR: Cannot send message to server %s: server not running", s.Name)
 		return fmt.Errorf("server not running")
 	}
 
 	_, err := s.Stdin.Write(append(message, '\n'))
-	return err
+	if err != nil {
+		log.Printf("ERROR: Failed to send message to server %s: %v", s.Name, err)
+		log.Printf("=== MCP SEND MESSAGE END (Server: %s) - FAILED ===", s.Name)
+		return err
+	}
+
+	log.Printf("INFO: Successfully sent message to server %s", s.Name)
+	log.Printf("=== MCP SEND MESSAGE END (Server: %s) - SUCCESS ===", s.Name)
+	return nil
 }
 
 // ReadMessage reads a JSON-RPC message from the MCP server with context timeout
