@@ -29,6 +29,10 @@ This is a Remote MCP Proxy service that runs in Docker to bridge local MCP serve
 - **Benchmarks**: `go test -bench=. ./...`
 - **Lint**: `go fmt ./...` and `go vet ./...`
 
+## Important Development Notes
+
+**File Synchronization**: The local development files in this repository are separate from the deployed Docker server. When code changes are made locally, they must be manually synchronized to the production server before testing on the live domain. Local changes cannot be tested live until this synchronization occurs.
+
 ## Configuration
 
 The service expects a configuration file mounted at `/app/config.json` with the same format as `claude_desktop_config.json`:
