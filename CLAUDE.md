@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The project lets anyone connect a local MCP server to Claude.ai by acting as a Remote MCP bridge. Even early experimental servers can be used from the web UI or smartphone app.
+
 ## Project Overview
 
 This is a Remote MCP Proxy service that runs in Docker to bridge local MCP servers with Claude's Remote MCP protocol. The proxy serves multiple MCP servers through different URL paths (e.g., `mydomain.com/notion-mcp/sse`, `mydomain.com/memory-mcp/sse`).

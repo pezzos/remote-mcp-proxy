@@ -2,11 +2,11 @@
 
 ## Problem Statement
 
-Many MCP (Model Context Protocol) servers are designed to run locally and are not yet compatible with Claude's Remote MCP protocol. This prevents users from accessing these MCP servers through Claude's web UI, limiting their functionality to desktop applications only.
+Lots of exciting MCP servers exist today, but most only run on your local machine. Without Remote MCP support, they can't be reached from Claude.ai or your phone, which keeps these tools from broader adoption.
 
 ## Solution Overview
 
-Build a Docker-based proxy service that bridges local MCP servers with Claude's Remote MCP protocol, enabling any local MCP to be accessed through Claude's web interface.
+Create a lightweight proxy (packaged in Docker) that speaks the Remote MCP protocol. It launches your local MCP servers and exposes them at URLs Claude.ai understands. Suddenly those desktop-only integrations become available everywhere.
 
 ## Architecture
 
@@ -42,6 +42,8 @@ Examples:
 - `https://mydomain.com/notion-mcp/sse`
 - `https://mydomain.com/memory-mcp/sse`
 - `https://mydomain.com/filesystem-mcp/sse`
+
+These URLs work from anywhere—desktop, browser, or mobile app.
 
 ### Configuration Format
 
