@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -128,10 +129,38 @@ func (t *Translator) MCPToRemote(mcpData []byte) ([]byte, error) {
 		messageType = "response"
 	}
 
+	// Enhanced logging for tool discovery debugging
+	if messageType == "response" && jsonrpcMsg.ID != nil {
+		log.Printf("=== TOOL DISCOVERY DEBUG ===")
+		log.Printf("DEBUG: Processing MCP response - ID: %v, Method: %s", jsonrpcMsg.ID, jsonrpcMsg.Method)
+		log.Printf("DEBUG: Raw MCP response: %s", string(mcpData))
+		log.Printf("DEBUG: Has result: %v, Has error: %v", jsonrpcMsg.Result != nil, jsonrpcMsg.Error != nil)
+	}
+
 	// Transform tool names in tools/list responses for Claude.ai compatibility
 	result := jsonrpcMsg.Result
 	if messageType == "response" && result != nil {
+		// Check if this is a tools/list response for enhanced logging
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			if tools, exists := resultMap["tools"]; exists {
+				log.Printf("DEBUG: Found tools/list response with %d tools before normalization", func() int {
+					if toolsList, ok := tools.([]interface{}); ok {
+						return len(toolsList)
+					}
+					return 0
+				}())
+				log.Printf("DEBUG: Tools before normalization: %+v", tools)
+			}
+		}
+
 		result = t.normalizeToolNames(result)
+
+		// Log after normalization
+		if resultMap, ok := result.(map[string]interface{}); ok {
+			if tools, exists := resultMap["tools"]; exists {
+				log.Printf("DEBUG: Tools after normalization: %+v", tools)
+			}
+		}
 	}
 
 	// Convert to Remote MCP format
@@ -144,7 +173,19 @@ func (t *Translator) MCPToRemote(mcpData []byte) ([]byte, error) {
 		Error:  jsonrpcMsg.Error,
 	}
 
-	return json.Marshal(remoteMsg)
+	remoteMsgBytes, err := json.Marshal(remoteMsg)
+	if err != nil {
+		return nil, err
+	}
+
+	// Enhanced logging for Remote MCP message format validation
+	if messageType == "response" && jsonrpcMsg.ID != nil {
+		log.Printf("DEBUG: Final Remote MCP message: %s", string(remoteMsgBytes))
+		log.Printf("DEBUG: Remote MCP message type: %s, ID: %v", remoteMsg.Type, remoteMsg.ID)
+		log.Printf("=== TOOL DISCOVERY DEBUG END ===")
+	}
+
+	return remoteMsgBytes, nil
 }
 
 // ValidateMessage validates that a message conforms to expected format
@@ -405,7 +446,7 @@ func (t *Translator) normalizeToolNames(result interface{}) interface{} {
 						for k, v := range toolMap {
 							normalizedTool[k] = v
 						}
-						
+
 						// Transform the tool name: convert hyphens to underscores and lowercase
 						if name, exists := normalizedTool["name"]; exists {
 							if nameStr, ok := name.(string); ok {
@@ -418,7 +459,7 @@ func (t *Translator) normalizeToolNames(result interface{}) interface{} {
 						normalizedTools[i] = tool
 					}
 				}
-				
+
 				// Update the result map with normalized tools
 				normalizedResult := make(map[string]interface{})
 				for k, v := range resultMap {
@@ -429,7 +470,7 @@ func (t *Translator) normalizeToolNames(result interface{}) interface{} {
 			}
 		}
 	}
-	
+
 	// Return original result if no tools found or transformation not applicable
 	return result
 }
@@ -446,7 +487,7 @@ func (t *Translator) denormalizeToolNames(params interface{}) interface{} {
 				if strings.HasPrefix(originalName, "api-") {
 					originalName = "API" + originalName[3:]
 				}
-				
+
 				// Create a copy of the params map with the transformed name
 				normalizedParams := make(map[string]interface{})
 				for k, v := range paramsMap {
@@ -457,7 +498,7 @@ func (t *Translator) denormalizeToolNames(params interface{}) interface{} {
 			}
 		}
 	}
-	
+
 	// Return original params if no transformation needed
 	return params
 }

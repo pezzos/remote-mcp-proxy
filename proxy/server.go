@@ -571,6 +571,11 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 
 			log.Printf("DEBUG: Translated message for SSE: %s", string(remoteMCPMessage))
 
+			log.Printf("=== SSE MESSAGE TRANSMISSION DEBUG ===")
+			log.Printf("DEBUG: Sending SSE message to Claude.ai for server %s, session %s", mcpServer.Name, sessionID)
+			log.Printf("DEBUG: SSE message size: %d bytes", len(remoteMCPMessage))
+			log.Printf("DEBUG: SSE event format validation: event=message, data follows")
+
 			// Write SSE event with error handling
 			if _, err := fmt.Fprintf(w, "event: message\n"); err != nil {
 				log.Printf("ERROR: Failed to write SSE event header for server %s: %v", mcpServer.Name, err)
@@ -589,6 +594,8 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 			}
 
 			log.Printf("DEBUG: Sent SSE message for server %s", mcpServer.Name)
+			log.Printf("SUCCESS: SSE message successfully transmitted to Claude.ai")
+			log.Printf("=== SSE MESSAGE TRANSMISSION DEBUG END ===")
 		}
 	}
 }
@@ -1043,9 +1050,9 @@ func (s *Server) handleClientRegistration(w http.ResponseWriter, r *http.Request
 
 	// For simplicity, accept any registration request
 	registrationResponse := map[string]interface{}{
-		"client_id":     clientID,
-		"client_secret": clientSecret,
-		"client_id_issued_at": time.Now().Unix(),
+		"client_id":                clientID,
+		"client_secret":            clientSecret,
+		"client_id_issued_at":      time.Now().Unix(),
 		"client_secret_expires_at": 0, // Never expires
 		"redirect_uris": []string{
 			"https://claude.ai/oauth/callback",
@@ -1081,7 +1088,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	// Generate authorization code
 	authCode := generateRandomString(32)
-	
+
 	log.Printf("INFO: OAuth authorization request - Client: %s, Redirect: %s", clientID, redirectURI)
 
 	// Redirect with authorization code
@@ -1108,7 +1115,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{
-			"error": "invalid_request",
+			"error":             "invalid_request",
 			"error_description": "Invalid token request",
 		})
 		return

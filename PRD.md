@@ -320,15 +320,184 @@ func (s *Server) validateAuthentication(r *http.Request) bool {
 - **Inbound** (tools/call): `api_get_user` → `API-get-user`
 - **Benefits**: Maintains MCP server compatibility while satisfying Claude.ai requirements
 
+## Connected But No Tools Issue Analysis
+
+### Current Status (2025-06-23)
+**CRITICAL ISSUE**: Claude.ai shows "Connected" status after successful OAuth authentication and handshake, but tools from MCP servers do not appear in the interface despite:
+- ✅ Successful OAuth 2.0 Bearer token authentication
+- ✅ Successful MCP initialize/initialized handshake sequence
+- ✅ Successful tools/list responses with tool name normalization
+- ✅ Correct SSE message format transmission to Claude.ai
+- ✅ No error logs or failures in the proxy
+
+### Comprehensive Root Cause Analysis
+
+#### 1. Tool Schema Validation Issues (HIGH PROBABILITY)
+**Problem**: Claude.ai may be silently rejecting tools that don't conform to strict JSON Schema requirements.
+**Symptoms**: Tools sent correctly but not displayed in UI
+**Investigation Needed**:
+- Validate all tool input schemas are valid JSON Schema Draft 7
+- Check for required properties: `name`, `description`, `inputSchema`
+- Verify `inputSchema.type` is always `"object"`
+- Ensure no circular references in schemas
+- Check for unsupported JSON Schema keywords
+
+#### 2. Tool Description Format Issues (HIGH PROBABILITY)  
+**Problem**: Tool descriptions may contain formatting that Claude.ai rejects
+**Symptoms**: Tools with invalid descriptions are filtered out
+**Investigation Needed**:
+- Check for special characters in tool names (despite normalization)
+- Verify description length limits
+- Look for invalid characters or encoding issues
+- Check for missing or empty descriptions
+
+#### 3. Remote MCP Message Timing Issues (MEDIUM PROBABILITY)
+**Problem**: Tools/list responses sent before Claude.ai is ready to process them
+**Symptoms**: Messages sent but ignored by Claude.ai
+**Investigation Needed**:
+- Add delay after handshake completion before sending tools
+- Implement message ordering guarantees
+- Check if tools should be sent only after specific Claude.ai requests
+
+#### 4. Session State Synchronization (MEDIUM PROBABILITY)
+**Problem**: Proxy session state doesn't match Claude.ai's session expectations
+**Symptoms**: Session appears connected but tools aren't associated correctly
+**Investigation Needed**:
+- Verify session ID consistency across all messages
+- Check if Claude.ai expects specific session initialization sequence
+- Validate `Mcp-Session-Id` header usage
+
+#### 5. Tool Input Schema Compliance (HIGH PROBABILITY)
+**Problem**: Tool input schemas may be using unsupported JSON Schema features
+**Symptoms**: Tools rejected due to schema validation failures
+**Specific Checks Needed**:
+```json
+{
+  "name": "tool_name",
+  "description": "Valid description",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "param": {
+        "type": "string",
+        "description": "Parameter description"
+      }
+    },
+    "required": ["param"]
+  }
+}
+```
+
+#### 6. SSE Event Format Compliance (MEDIUM PROBABILITY)
+**Problem**: SSE message format may have subtle non-compliance with Remote MCP spec
+**Current Format**: `event: message\ndata: {JSON}\n\n`
+**Investigation Needed**:
+- Check if `event: message` is required or should be different
+- Verify JSON formatting in data section
+- Check for required SSE headers or metadata
+
+#### 7. Tool Name Validation Beyond Normalization (LOW PROBABILITY)
+**Problem**: Even after snake_case conversion, tool names may be invalid
+**Current Normalization**: `API-get-user` → `api_get_user`
+**Additional Checks Needed**:
+- Maximum name length limits
+- Reserved word conflicts
+- Character set restrictions beyond hyphens
+- Naming convention requirements
+
+#### 8. Claude.ai Integration Context Issues (MEDIUM PROBABILITY)
+**Problem**: Tools may not be properly associated with the authenticated integration
+**Symptoms**: Authentication works but tools aren't linked to the connection
+**Investigation Needed**:
+- Check if tools need to be requested explicitly by Claude.ai
+- Verify authentication context is maintained across all messages
+- Check if Bearer token needs to be included in tool responses
+
+#### 9. MCP Server Response Format Issues (MEDIUM PROBABILITY)
+**Problem**: MCP servers may return tool definitions in formats Claude.ai doesn't accept
+**Investigation Needed**:
+- Compare tool formats across different MCP servers
+- Check for server-specific formatting issues
+- Validate against official MCP specification examples
+
+#### 10. Network/Protocol Layer Issues (LOW PROBABILITY)
+**Problem**: Messages may be corrupted or lost between proxy and Claude.ai
+**Symptoms**: Successful logging but tools not received
+**Investigation Needed**:
+- Add message integrity checks
+- Implement delivery confirmation
+- Check for connection drops or timeouts
+
+#### 11. Claude.ai Cache/State Issues (LOW PROBABILITY)
+**Problem**: Claude.ai may be caching old integration state
+**Symptoms**: Changes not reflected despite successful deployment
+**Investigation Needed**:
+- Test with fresh Claude.ai session
+- Check for integration cache invalidation
+- Verify deployment completed successfully
+
+#### 12. Tool Metadata Missing Requirements (MEDIUM PROBABILITY)
+**Problem**: Tools missing required metadata that Claude.ai expects
+**Investigation Needed**:
+- Check if tools need version information
+- Verify if additional metadata fields are required
+- Look for undocumented required properties
+
+### Recommended Investigation Priority
+
+#### Phase 1: Tool Schema Validation (IMMEDIATE)
+1. **Implement comprehensive tool schema validation**
+2. **Add detailed logging for tool rejection reasons**
+3. **Compare against working MCP implementations**
+4. **Test with minimal/known-good tool examples**
+
+#### Phase 2: Message Format Deep Dive (HIGH PRIORITY)
+1. **Capture complete SSE stream for analysis**
+2. **Compare against Claude.ai's expected format**
+3. **Test with different tool response patterns**
+4. **Validate JSON Schema compliance**
+
+#### Phase 3: Timing and State Investigation (MEDIUM PRIORITY)
+1. **Add message sequencing analysis**
+2. **Test tool discovery after different delays**
+3. **Verify session state consistency**
+4. **Check authentication context preservation**
+
+### Testing Strategy
+
+#### Minimal Test Case
+Create a minimal MCP server that returns only:
+```json
+{
+  "tools": [{
+    "name": "test_tool",
+    "description": "Simple test tool",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }]
+}
+```
+
+#### Incremental Complexity
+1. Start with minimal tool definition
+2. Add single parameter with string type
+3. Add required parameters
+4. Add complex nested schemas
+5. Test with original server tools
+
 ## Success Criteria
 
-1. **Functional**: Any local MCP server can be accessed through Claude.ai web UI ⚠️ **PENDING COMPLETE DEPLOYMENT**
+1. **Functional**: Any local MCP server can be accessed through Claude.ai web UI ⚠️ **BLOCKED - Tools not appearing**
 2. **Reliable**: Proxy handles process failures and restarts gracefully ✅ **MET**
 3. **Performant**: Low latency translation between protocols ✅ **MET**
 4. **Secure**: Safe execution of configured MCP servers ✅ **MET**
 5. **Maintainable**: Easy to deploy and configure via Docker ✅ **MET**
 6. **Protocol Compliant**: Follows Remote MCP specification exactly ✅ **MET** (OAuth 2.0 DCR implemented, needs deployment)
 7. **OAuth Compliant**: Supports Dynamic Client Registration and standard OAuth flows ✅ **MET** (RFC 7591 implemented)
+8. **Tool Discovery**: MCP server tools appear correctly in Claude.ai interface ❌ **FAILING** (root cause under investigation)
 
 ## Future Enhancements
 
