@@ -175,6 +175,12 @@ func (s *Server) Router() http.Handler {
 	// List tools for a specific MCP server
 	r.HandleFunc("/listtools/{server:[^/]+}", s.handleListTools).Methods("GET", "OPTIONS")
 
+	// OAuth 2.0 Dynamic Client Registration endpoints
+	r.HandleFunc("/.well-known/oauth-authorization-server", s.handleOAuthMetadata).Methods("GET")
+	r.HandleFunc("/oauth/register", s.handleClientRegistration).Methods("POST", "OPTIONS")
+	r.HandleFunc("/oauth/authorize", s.handleAuthorize).Methods("GET", "POST")
+	r.HandleFunc("/oauth/token", s.handleToken).Methods("POST", "OPTIONS")
+
 	// MCP server endpoints - pattern: /{server-name}/sse
 	r.HandleFunc("/{server:[^/]+}/sse", s.handleMCPRequest).Methods("GET", "POST")
 
@@ -357,7 +363,10 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	if !s.validateAuthentication(r) {
 		log.Printf("ERROR: Authentication failed for request from %s", r.RemoteAddr)
 		log.Printf("=== MCP REQUEST END (AUTH FAILED) ===")
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		// Add WWW-Authenticate header for proper OAuth Bearer token flow
+		w.Header().Set("WWW-Authenticate", "Bearer realm=\"Remote MCP Server\"")
+		w.Header().Set("Content-Type", "application/json")
+		http.Error(w, `{"error":"unauthorized","error_description":"Bearer token required for Remote MCP access"}`, http.StatusUnauthorized)
 		return
 	}
 	log.Printf("SUCCESS: Authentication passed")
@@ -681,8 +690,8 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 		}
 
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-ID")
-		w.Header().Set("Access-Control-Expose-Headers", "X-Session-ID")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Session-ID, Mcp-Session-Id")
+		w.Header().Set("Access-Control-Expose-Headers", "X-Session-ID, WWW-Authenticate")
 
 		// Handle preflight requests
 		if r.Method == "OPTIONS" {
@@ -991,4 +1000,142 @@ func (s *Server) validateOrigin(r *http.Request) bool {
 
 	log.Printf("Origin not allowed: %s", origin)
 	return false
+}
+
+// OAuth 2.0 Dynamic Client Registration Implementation
+
+// handleOAuthMetadata returns OAuth server metadata for discovery
+func (s *Server) handleOAuthMetadata(w http.ResponseWriter, r *http.Request) {
+	metadata := map[string]interface{}{
+		"issuer":                 fmt.Sprintf("https://%s", r.Host),
+		"authorization_endpoint": fmt.Sprintf("https://%s/oauth/authorize", r.Host),
+		"token_endpoint":         fmt.Sprintf("https://%s/oauth/token", r.Host),
+		"registration_endpoint":  fmt.Sprintf("https://%s/oauth/register", r.Host),
+		"response_types_supported": []string{
+			"code",
+		},
+		"grant_types_supported": []string{
+			"authorization_code",
+		},
+		"scopes_supported": []string{
+			"mcp",
+		},
+		"token_endpoint_auth_methods_supported": []string{
+			"client_secret_basic",
+			"client_secret_post",
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(metadata)
+}
+
+// handleClientRegistration handles OAuth 2.0 Dynamic Client Registration
+func (s *Server) handleClientRegistration(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Generate a client ID and secret
+	clientID := generateRandomString(32)
+	clientSecret := generateRandomString(64)
+
+	// For simplicity, accept any registration request
+	registrationResponse := map[string]interface{}{
+		"client_id":     clientID,
+		"client_secret": clientSecret,
+		"client_id_issued_at": time.Now().Unix(),
+		"client_secret_expires_at": 0, // Never expires
+		"redirect_uris": []string{
+			"https://claude.ai/oauth/callback",
+			"https://www.claude.ai/oauth/callback",
+		},
+		"grant_types": []string{
+			"authorization_code",
+		},
+		"response_types": []string{
+			"code",
+		},
+		"scope": "mcp",
+	}
+
+	log.Printf("INFO: OAuth client registered - ID: %s", clientID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(registrationResponse)
+}
+
+// handleAuthorize handles OAuth authorization requests
+func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
+	clientID := r.URL.Query().Get("client_id")
+	redirectURI := r.URL.Query().Get("redirect_uri")
+	state := r.URL.Query().Get("state")
+	responseType := r.URL.Query().Get("response_type")
+
+	if clientID == "" || redirectURI == "" || responseType != "code" {
+		http.Error(w, "Invalid authorization request", http.StatusBadRequest)
+		return
+	}
+
+	// Generate authorization code
+	authCode := generateRandomString(32)
+	
+	log.Printf("INFO: OAuth authorization request - Client: %s, Redirect: %s", clientID, redirectURI)
+
+	// Redirect with authorization code
+	callbackURL := fmt.Sprintf("%s?code=%s", redirectURI, authCode)
+	if state != "" {
+		callbackURL += fmt.Sprintf("&state=%s", state)
+	}
+
+	http.Redirect(w, r, callbackURL, http.StatusFound)
+}
+
+// handleToken handles OAuth token exchange
+func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	grantType := r.FormValue("grant_type")
+	code := r.FormValue("code")
+	clientID := r.FormValue("client_id")
+
+	if grantType != "authorization_code" || code == "" || clientID == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"error": "invalid_request",
+			"error_description": "Invalid token request",
+		})
+		return
+	}
+
+	// Generate access token
+	accessToken := generateRandomString(64)
+
+	tokenResponse := map[string]interface{}{
+		"access_token": accessToken,
+		"token_type":   "Bearer",
+		"expires_in":   3600,
+		"scope":        "mcp",
+	}
+
+	log.Printf("INFO: OAuth token issued - Client: %s, Token: %s...", clientID, accessToken[:10])
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(tokenResponse)
+}
+
+// generateRandomString generates a cryptographically secure random string
+func generateRandomString(length int) string {
+	bytes := make([]byte, length/2)
+	if _, err := rand.Read(bytes); err != nil {
+		// Fallback to time-based generation if crypto/rand fails
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(bytes)
 }

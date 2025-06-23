@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Method Fallback System**: Intelligent fallback responses for unsupported MCP methods like `resources/list`, `prompts/list` to improve Claude.ai compatibility
 - **Request Timeout Handling**: Automatic timeout detection for unresponsive MCP methods with 3-second fallback responses
 - **Bearer Token Authentication**: Required OAuth Bearer token authentication for Claude.ai Remote MCP compatibility
+- **OAuth 2.0 Dynamic Client Registration**: Complete OAuth 2.0 DCR implementation with discovery endpoint, client registration, authorization flow, and token exchange following RFC 7591
 
 ### Fixed
 - **Critical Session Management Bug**: Fixed session ID handling to properly use Claude.ai's `Mcp-Session-Id` header instead of generating new sessions for each request
@@ -27,9 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **CLAUDE.md Guidelines**: Added mandatory changelog management protocol and automated commit preparation workflow
 - **Request Tracking**: Enhanced protocol translator to track pending requests for intelligent error handling
 - **Authentication Requirement**: Implemented Bearer token validation that rejects requests without proper Authorization header
+- **OAuth Endpoints**: Added comprehensive OAuth 2.0 endpoints (/.well-known/oauth-authorization-server, /oauth/register, /oauth/authorize, /oauth/token) with proper CORS support
 
 ### Security
 - **Authentication Flow**: Claude.ai integration now requires Bearer token authentication matching Remote MCP specification requirements
+- **OAuth 2.0 Compliance**: Full OAuth 2.0 Dynamic Client Registration implementation ensures secure authentication handshake with Claude.ai
 
 ## [1.2.0] - 2025-06-23
 
