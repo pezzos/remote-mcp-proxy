@@ -240,19 +240,32 @@ services:
 
 Based on the official MCP specification and Claude.ai integration documentation, our current implementation has several critical issues:
 
+### Root Cause Analysis (2025-06-23)
+**Issue**: Claude.ai receives tool responses but doesn't display tools in UI.
+
+**Investigation**: 
+- ✅ MCP server responds correctly to `tools/list` with full tool definitions
+- ✅ Fallback system handles `resources/list` with empty response  
+- ✅ Both responses sent via SSE to Claude.ai
+- ❌ Claude.ai still shows no tools available
+
+**Root Cause Identified**: 
+SSE messages are being sent in **JSON-RPC 2.0 format** instead of **Remote MCP format**.
+
+Current: `{"result":{"tools":[...]},"jsonrpc":"2.0","id":1}`
+Expected: `{"type":"response","result":{"tools":[...]},"id":1}`
+
 ### Missing Required Features
-1. **Endpoint Event**: SSE connections must send an "endpoint" event with session URI
-2. **Session Management**: Missing Mcp-Session-Id header support for stateful sessions
-3. **Message Format**: Not using proper Remote MCP message structure
-4. **Protocol Translation**: Initialize request forwarding needs session context
-5. **Resource/Prompt Support**: Only implementing tools, missing resources and prompts
+1. **Message Format**: ❌ **CRITICAL** - SSE sends JSON-RPC instead of Remote MCP format
+2. **Endpoint Event**: ✅ **IMPLEMENTED** - SSE connections send endpoint event with session URI
+3. **Session Management**: ✅ **IMPLEMENTED** - Mcp-Session-Id header support working
+4. **Protocol Translation**: ✅ **PARTIAL** - POST requests work, SSE responses need format fix
+5. **Resource/Prompt Support**: ✅ **IMPLEMENTED** - Fallback system provides empty responses
 
 ### Current Implementation Issues
-- SSE connection sends "connected" event instead of required "endpoint" event
-- No session URL provided to Claude for bidirectional communication
-- Missing proper Remote MCP message wrapper format
-- Initialize handshake doesn't establish proper session state
-- Tools showing as empty `{}` instead of actual tool definitions
+- **CRITICAL**: SSE responses use JSON-RPC format instead of Remote MCP format
+- Tools data is correct but wrapped in wrong message structure
+- Protocol translator `MCPToRemote()` works for endpoint events but not SSE messages
 
 ### Required Remote MCP Protocol Flow
 1. **SSE Connection**: Send "endpoint" event with session URI for client messages

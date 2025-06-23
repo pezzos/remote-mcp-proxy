@@ -508,6 +508,8 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 					continue
 				}
 
+				log.Printf("DEBUG: Translated timeout fallback for SSE: %s", string(remoteMCPMessage))
+
 				// Write SSE event for timeout fallback
 				if _, err := fmt.Fprintf(w, "event: message\n"); err != nil {
 					log.Printf("ERROR: Failed to write SSE event header for timeout fallback for server %s: %v", mcpServer.Name, err)
@@ -557,6 +559,8 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 				log.Printf("ERROR: Error translating MCP message for server %s: %v", mcpServer.Name, err)
 				continue
 			}
+
+			log.Printf("DEBUG: Translated message for SSE: %s", string(remoteMCPMessage))
 
 			// Write SSE event with error handling
 			if _, err := fmt.Fprintf(w, "event: message\n"); err != nil {
