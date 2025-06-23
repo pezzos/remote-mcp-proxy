@@ -3,12 +3,10 @@ services:
     build: .
     container_name: remote-mcp-proxy
     restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json
     environment:
       - GO_ENV=production
-      - CONFIG_FILE=/app/config.json
-      # Optimize for SSE connections
-      - GOMAXPROCS=2
-      - GOMEMLIMIT=400MiB
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -18,25 +16,10 @@ services:
       - proxy
     labels:
       - traefik.enable=true
-      
-      # Router configuration
       - traefik.http.routers.remote-mcp-proxy.rule=Host(`mcp.${DOMAIN}`)
       - traefik.http.routers.remote-mcp-proxy.entrypoints=websecure
       - traefik.http.routers.remote-mcp-proxy.tls.certresolver=myresolver
-      
-      # Service configuration
       - traefik.http.services.remote-mcp-proxy.loadbalancer.server.port=8080
-      
-      # Basic SSE optimizations
-      - traefik.http.routers.remote-mcp-proxy.middlewares=mcp-headers
-      
-      # CORS middleware for Remote MCP
-      - traefik.http.middlewares.mcp-headers.headers.accesscontrolalloworigin=*
-      - traefik.http.middlewares.mcp-headers.headers.accesscontrolallowmethods=GET,POST,OPTIONS
-      - traefik.http.middlewares.mcp-headers.headers.accesscontrolallowheaders=Accept,Authorization,Content-Type,Mcp-Session-Id,X-Requested-With
-    # Resource limits for docker-compose (not swarm)
-    mem_limit: 512m
-    cpus: 0.5
 
 networks:
   proxy:
