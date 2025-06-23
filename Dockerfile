@@ -64,6 +64,9 @@ WORKDIR /root/
 # Copy the binary from builder stage
 COPY --from=builder /app/main .
 
+# Copy configuration file
+COPY config.json /app/config.json
+
 # Create directories for config (config.json will be mounted at runtime)
 RUN mkdir -p /app /config
 
