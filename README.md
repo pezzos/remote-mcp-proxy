@@ -301,12 +301,35 @@ The proxy is built in Go and consists of:
 
 ## Monitoring and Health Checks
 
-The proxy includes a health check endpoint:
+The proxy includes several endpoints for monitoring and debugging:
 
+### Health Check
 ```bash
 # Check proxy health
 curl http://localhost:8080/health
+# Response: {"status":"healthy"}
 ```
+
+### List Configured MCP Servers
+```bash
+# List all configured MCP servers and their status
+curl http://localhost:8080/listmcp
+# Response: {"count":1,"servers":[{"name":"notionApi","running":true,"pid":11,"command":"npx","args":["-y","@notionhq/notion-mcp-server"]}]}
+```
+
+### List Tools for an MCP Server
+```bash
+# List available tools for a specific MCP server
+curl http://localhost:8080/listtools/{server-name}
+# Example: curl http://localhost:8080/listtools/notionApi
+# Response: {"server":"notionApi","response":{"id":"...","jsonrpc":"2.0","result":{"tools":[...]}}}
+```
+
+These endpoints are useful for:
+- **Health monitoring**: Verify the proxy is running
+- **Configuration debugging**: Check which MCP servers are configured and running
+- **Tool discovery**: See what tools are available from each MCP server
+- **Troubleshooting**: Identify if MCP servers are properly started and responding
 
 ## Troubleshooting
 
@@ -321,6 +344,9 @@ curl http://localhost:8080/health
 - Check firewall and network configuration
 - Verify SSL/TLS setup for HTTPS endpoints
 - Test the SSE endpoint directly: `curl http://localhost:8080/{server-name}/sse`
+- Use the monitoring endpoints to debug:
+  - Check if MCP servers are running: `curl http://localhost:8080/listmcp`
+  - Verify tools are available: `curl http://localhost:8080/listtools/{server-name}`
 
 ### Protocol Errors
 - Confirm your MCP server supports the expected protocol version
