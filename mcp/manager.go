@@ -73,6 +73,51 @@ func (m *Manager) GetServer(name string) (*Server, bool) {
 	return server, exists
 }
 
+// ServerStatus represents the status of an MCP server
+type ServerStatus struct {
+	Name      string `json:"name"`
+	Running   bool   `json:"running"`
+	PID       int    `json:"pid,omitempty"`
+	Command   string `json:"command"`
+	Args      []string `json:"args,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
+
+// GetAllServers returns status information for all configured servers
+func (m *Manager) GetAllServers() []ServerStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var statuses []ServerStatus
+	for name, server := range m.servers {
+		status := ServerStatus{
+			Name:    name,
+			Command: server.Config.Command,
+			Args:    server.Config.Args,
+		}
+
+		server.mu.RLock()
+		if server.Process != nil && server.Process.Process != nil {
+			status.Running = true
+			status.PID = server.Process.Process.Pid
+		} else {
+			status.Running = false
+		}
+		server.mu.RUnlock()
+
+		statuses = append(statuses, status)
+	}
+
+	return statuses
+}
+
+// IsRunning checks if the server is currently running
+func (s *Server) IsRunning() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Process != nil && s.Process.Process != nil
+}
+
 // StopAll stops all running MCP servers
 func (m *Manager) StopAll() {
 	m.mu.Lock()

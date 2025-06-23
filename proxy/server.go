@@ -169,6 +169,12 @@ func (s *Server) Router() http.Handler {
 	// Health check endpoint
 	r.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
 
+	// List all configured MCP servers
+	r.HandleFunc("/listmcp", s.handleListMCP).Methods("GET", "OPTIONS")
+
+	// List tools for a specific MCP server
+	r.HandleFunc("/listtools/{server:[^/]+}", s.handleListTools).Methods("GET", "OPTIONS")
+
 	// MCP server endpoints - pattern: /{server-name}/sse
 	r.HandleFunc("/{server:[^/]+}/sse", s.handleMCPRequest).Methods("GET", "POST")
 
@@ -187,6 +193,128 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		log.Printf("ERROR: Failed to write health response: %v", err)
 	} else {
 		log.Printf("DEBUG: Health check response sent successfully")
+	}
+}
+
+// handleListMCP returns the list of all configured MCP servers and their status
+func (s *Server) handleListMCP(w http.ResponseWriter, r *http.Request) {
+	log.Printf("INFO: Handling listmcp request")
+
+	servers := s.mcpManager.GetAllServers()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"servers": servers,
+		"count":   len(servers),
+	}); err != nil {
+		log.Printf("ERROR: Failed to encode listmcp response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	} else {
+		log.Printf("INFO: Successfully returned list of %d MCP servers", len(servers))
+	}
+}
+
+// handleListTools returns the available tools for a specific MCP server
+func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	serverName := vars["server"]
+
+	log.Printf("INFO: Handling listtools request for server: %s", serverName)
+
+	// Get the MCP server
+	mcpServer, exists := s.mcpManager.GetServer(serverName)
+	if !exists {
+		log.Printf("ERROR: MCP server '%s' not found", serverName)
+		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
+		return
+	}
+
+	// Check if server is running
+	if !mcpServer.IsRunning() {
+		log.Printf("ERROR: MCP server '%s' is not running", serverName)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "server_not_running",
+			"message": fmt.Sprintf("MCP server '%s' is not running", serverName),
+			"server":  serverName,
+		})
+		return
+	}
+
+	// Query the MCP server for available tools using the tools/list request
+	toolsListRequest := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"id":      fmt.Sprintf("listtools-%d", time.Now().UnixNano()),
+		"method":  "tools/list",
+	}
+
+	requestBytes, err := json.Marshal(toolsListRequest)
+	if err != nil {
+		log.Printf("ERROR: Failed to marshal tools/list request: %v", err)
+		http.Error(w, "Failed to create tools request", http.StatusInternalServerError)
+		return
+	}
+
+	// Send the tools/list request to the MCP server
+	if err := mcpServer.SendMessage(requestBytes); err != nil {
+		log.Printf("ERROR: Failed to send tools/list request to server %s: %v", serverName, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "send_failed",
+			"message": fmt.Sprintf("Failed to send request to MCP server: %v", err),
+			"server":  serverName,
+		})
+		return
+	}
+
+	// Read the response with a timeout
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	responseBytes, err := mcpServer.ReadMessage(ctx)
+	if err != nil {
+		log.Printf("ERROR: Failed to read tools/list response from server %s: %v", serverName, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "read_failed",
+			"message": fmt.Sprintf("Failed to read response from MCP server: %v", err),
+			"server":  serverName,
+		})
+		return
+	}
+
+	// Parse the response to extract tools information
+	var mcpResponse map[string]interface{}
+	if err := json.Unmarshal(responseBytes, &mcpResponse); err != nil {
+		log.Printf("ERROR: Failed to parse tools/list response from server %s: %v", serverName, err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":   "parse_failed",
+			"message": fmt.Sprintf("Failed to parse response from MCP server: %v", err),
+			"server":  serverName,
+		})
+		return
+	}
+
+	// Return the tools information
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	response := map[string]interface{}{
+		"server":   serverName,
+		"response": mcpResponse,
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("ERROR: Failed to encode listtools response: %v", err)
+	} else {
+		log.Printf("INFO: Successfully returned tools list for server %s", serverName)
 	}
 }
 
