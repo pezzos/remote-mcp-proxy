@@ -517,6 +517,12 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 				continue
 			}
 
+			// Check for "Method not found" errors and handle with fallbacks
+			if fallbackMessage, handled := s.translator.HandleMethodNotFoundError(sessionID, message); handled {
+				log.Printf("INFO: Provided fallback response for unsupported method in server %s", mcpServer.Name)
+				message = fallbackMessage
+			}
+
 			// Translate and send message
 			remoteMCPMessage, err := s.translator.MCPToRemote(message)
 			if err != nil {
@@ -593,6 +599,12 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 	if !s.translator.IsInitialized(sessionID) {
 		s.sendErrorResponse(w, jsonrpcMsg.ID, protocol.InvalidRequest, "Connection not initialized", false)
 		return
+	}
+
+	// Track the request for potential fallback handling
+	if jsonrpcMsg.Method != "" && jsonrpcMsg.ID != nil {
+		s.translator.TrackRequest(sessionID, jsonrpcMsg.ID, jsonrpcMsg.Method)
+		log.Printf("DEBUG: Tracking request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
 	}
 
 	// Translate Remote MCP message to local MCP format
@@ -845,6 +857,12 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("SUCCESS: Session message JSON-RPC parsed")
 	log.Printf("INFO: Session message method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
+
+	// Track the request for potential fallback handling
+	if jsonrpcMsg.Method != "" && jsonrpcMsg.ID != nil {
+		s.translator.TrackRequest(sessionID, jsonrpcMsg.ID, jsonrpcMsg.Method)
+		log.Printf("DEBUG: Tracking session request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
+	}
 
 	// Forward message to MCP server
 	if err := mcpServer.SendMessage(body); err != nil {

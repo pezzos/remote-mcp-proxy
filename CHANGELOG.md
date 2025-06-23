@@ -11,14 +11,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Comprehensive Changelog Management**: Automated changelog workflow integrated into CLAUDE.md development guidelines
 - **Traefik Session Persistence**: Sticky sessions, health checks, and SSE-optimized headers for better connection reliability
 - **Development Protocol**: Structured commit message conventions and documentation management process
+- **Method Fallback System**: Intelligent fallback responses for unsupported MCP methods like `resources/list`, `prompts/list` to improve Claude.ai compatibility
 
 ### Fixed
 - **Critical Session Management Bug**: Fixed session ID handling to properly use Claude.ai's `Mcp-Session-Id` header instead of generating new sessions for each request
 - **SSE Connection Coordination**: Ensured SSE connections use the same session management as POST requests for proper state persistence
+- **MCP Method Compatibility**: Resolved "Method not found" errors by providing empty responses for optional MCP methods that servers don't implement
 
 ### Changed
 - **Docker Compose Configuration**: Enhanced with Traefik optimizations including CORS headers, connection persistence, and resource management
 - **CLAUDE.md Guidelines**: Added mandatory changelog management protocol and automated commit preparation workflow
+- **Request Tracking**: Enhanced protocol translator to track pending requests for intelligent error handling
 
 ## [1.2.0] - 2025-06-23
 

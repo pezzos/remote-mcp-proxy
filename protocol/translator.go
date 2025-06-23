@@ -65,6 +65,7 @@ type ConnectionState struct {
 	ProtocolVersion string
 	Capabilities    map[string]interface{}
 	SessionID       string
+	PendingRequests map[interface{}]string // Maps request ID to method
 }
 
 // Translator handles protocol translation between Remote MCP and local MCP
@@ -202,6 +203,7 @@ func (t *Translator) HandleInitialize(sessionID string, params InitializeParams)
 		ProtocolVersion: MCPProtocolVersion,
 		Capabilities:    make(map[string]interface{}),
 		SessionID:       sessionID,
+		PendingRequests: make(map[interface{}]string),
 	}
 
 	// Set basic capabilities for proxy
@@ -266,4 +268,102 @@ func (t *Translator) RemoveConnection(sessionID string) {
 // IsHandshakeMessage checks if a message is part of the handshake process
 func (t *Translator) IsHandshakeMessage(method string) bool {
 	return method == "initialize" || method == "notifications/initialized"
+}
+
+// ShouldProvideFallback checks if we should provide a fallback response for unsupported methods
+func (t *Translator) ShouldProvideFallback(method string) bool {
+	fallbackMethods := []string{
+		"resources/list",
+		"resources/read",
+		"prompts/list",
+		"prompts/get",
+	}
+
+	for _, fm := range fallbackMethods {
+		if method == fm {
+			return true
+		}
+	}
+	return false
+}
+
+// CreateFallbackResponse creates a fallback response for unsupported methods
+func (t *Translator) CreateFallbackResponse(id interface{}, method string) ([]byte, error) {
+	var result interface{}
+
+	switch method {
+	case "resources/list":
+		result = map[string]interface{}{
+			"resources": []interface{}{},
+		}
+	case "resources/read":
+		return t.CreateErrorResponse(id, MethodNotFound, "Resource not found", false)
+	case "prompts/list":
+		result = map[string]interface{}{
+			"prompts": []interface{}{},
+		}
+	case "prompts/get":
+		return t.CreateErrorResponse(id, MethodNotFound, "Prompt not found", false)
+	default:
+		return t.CreateErrorResponse(id, MethodNotFound, "Method not found", false)
+	}
+
+	jsonrpcMsg := JSONRPCMessage{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  result,
+	}
+
+	return json.Marshal(jsonrpcMsg)
+}
+
+// TrackRequest tracks a pending request for fallback handling
+func (t *Translator) TrackRequest(sessionID string, requestID interface{}, method string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if state, exists := t.connections[sessionID]; exists {
+		state.PendingRequests[requestID] = method
+	}
+}
+
+// GetAndClearPendingMethod gets and removes a pending request method
+func (t *Translator) GetAndClearPendingMethod(sessionID string, requestID interface{}) (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if state, exists := t.connections[sessionID]; exists {
+		if method, found := state.PendingRequests[requestID]; found {
+			delete(state.PendingRequests, requestID)
+			return method, true
+		}
+	}
+	return "", false
+}
+
+// HandleMethodNotFoundError processes "Method not found" errors and provides fallbacks when appropriate
+func (t *Translator) HandleMethodNotFoundError(sessionID string, response []byte) ([]byte, bool) {
+	var mcpResponse JSONRPCMessage
+	if err := json.Unmarshal(response, &mcpResponse); err != nil {
+		return response, false
+	}
+
+	// Check if this is a "Method not found" error
+	if mcpResponse.Error == nil || mcpResponse.Error.Code != MethodNotFound {
+		return response, false
+	}
+
+	// Get the original method for this request ID
+	method, found := t.GetAndClearPendingMethod(sessionID, mcpResponse.ID)
+	if !found || !t.ShouldProvideFallback(method) {
+		return response, false
+	}
+
+	// Create fallback response
+	fallbackResponse, err := t.CreateFallbackResponse(mcpResponse.ID, method)
+	if err != nil {
+		return response, false
+	}
+
+	return fallbackResponse, true
 }
