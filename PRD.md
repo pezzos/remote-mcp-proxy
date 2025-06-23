@@ -251,3 +251,24 @@ services:
 - Automatic MCP server discovery
 - Load balancing for multiple instances
 - Advanced monitoring and alerting
+
+## Identified Improvement Opportunities
+
+### Security
+- [ ] **OAuth/JWT Authentication**: Replace placeholder token validation in `proxy/server.go` lines 544-572 with full OAuth or JWT verification. Tokens should never be logged.
+- [ ] **Configurable CORS**: Move allowed origins (lines 584-598) to configuration to avoid hardcoding and allow domain updates without recompiling.
+- [ ] **Strict Config Parsing**: Use `json.Decoder` with `DisallowUnknownFields` in `config/config.go` (lines 28-31) to catch unexpected fields and reduce misconfiguration risk.
+- [ ] **Drop Root Privileges**: Modify `Dockerfile` to run the service as a non-root user for container hardening.
+
+### Reliability
+- [ ] **MCP Server Restart Logic**: Implement process restart with exponential backoff where `mcp/manager.go` currently has a TODO at lines 348-368.
+- [ ] **Per‑Server Health Checks**: Extend `/health` in `proxy/server.go` lines 170-186 to report individual MCP server status and return appropriate HTTP codes.
+- [ ] **Capture Server stderr**: Pipe and log MCP server stderr output for easier debugging of failed processes.
+
+### Performance
+- [ ] **Configurable Connection Limits**: Expose the `maxConnections` and cleanup interval (lines 135-156 in `proxy/server.go`) as configuration options to tune for different deployments.
+- [ ] **SSE Reconnection Support**: Handle `Last-Event-ID` headers in `handleSSEConnection` to allow clients to resume streams after network interruptions.
+
+### Observability
+- [ ] **Structured Logging**: Replace `log.Printf` calls with a structured logging library and defined log levels for easier filtering.
+- [ ] **Metrics Endpoint**: Provide Prometheus-compatible metrics (e.g., connection counts, message throughput) to monitor performance.
