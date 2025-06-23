@@ -941,31 +941,30 @@ func (s *Server) validateAuthentication(r *http.Request) bool {
 	// Check for Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		// For now, allow requests without authentication (can be configured later)
-		log.Printf("No authorization header found, allowing request (auth disabled)")
-		return true
+		log.Printf("ERROR: No authorization header found, authentication required")
+		return false
 	}
 
 	// Parse Bearer token
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		log.Printf("Invalid authorization header format")
+		log.Printf("ERROR: Invalid authorization header format, expected Bearer token")
 		return false
 	}
 
 	token := strings.TrimPrefix(authHeader, "Bearer ")
 	if token == "" {
-		log.Printf("Empty bearer token")
+		log.Printf("ERROR: Empty bearer token")
 		return false
 	}
 
-	// Validate token (basic validation for now)
-	// In a production environment, this should validate against OAuth provider
-	if len(token) < 10 {
-		log.Printf("Token too short, likely invalid")
-		return false
-	}
-
-	log.Printf("Token validation passed for token: %s...", token[:10])
+	// Simple token validation - accept any non-empty token for Claude.ai compatibility
+	// For Claude.ai Remote MCP, any Bearer token should work
+	log.Printf("INFO: Authentication successful with token: %s...", func() string {
+		if len(token) > 10 {
+			return token[:10]
+		}
+		return token
+	}())
 	return true
 }
 
