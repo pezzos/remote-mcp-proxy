@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool Name Normalization**: Automatic conversion of tool names from hyphenated format (API-get-user) to snake_case (api_get_user) for Claude.ai compatibility
 
 ### Fixed
+- 🔥 **CRITICAL: Claude.ai Connection Issue Resolved**: Fixed the "Connect" button failing in Claude.ai Remote MCP integration
+  - **Root Cause**: Stdio deadlock during MCP server initialize handshake causing "context deadline exceeded" errors
+  - **Solution 1**: Added dedicated `readMu` mutex in `mcp/manager.go` to serialize stdout reads and prevent race conditions
+  - **Solution 2**: Fixed session initialization bug where sessions were never marked as initialized after successful handshake
+  - **Solution 3**: Increased initialize timeout from 10 to 30 seconds for slow npm-based MCP servers
+  - **Impact**: Claude.ai Remote MCP integration now works reliably - Connect button succeeds and tools are properly exposed
 - **Critical Session Management Bug**: Fixed session ID handling to properly use Claude.ai's `Mcp-Session-Id` header instead of generating new sessions for each request
 - **SSE Connection Coordination**: Ensured SSE connections use the same session management as POST requests for proper state persistence
 - **MCP Method Compatibility**: Resolved "Method not found" errors by providing empty responses for optional MCP methods that servers don't implement

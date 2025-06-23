@@ -25,7 +25,19 @@ type Server struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	mu      sync.RWMutex
-	readMu  sync.Mutex // Dedicated mutex for stdout reading
+	
+	// CRITICAL FIX: Dedicated mutex for stdout reading to prevent stdio deadlocks
+	// 
+	// This mutex serializes access to the MCP server's stdout stream, preventing
+	// race conditions when multiple concurrent HTTP requests try to read responses
+	// from the same MCP server simultaneously.
+	//
+	// Without this mutex, bufio.Scanner.Scan() calls can deadlock or interfere
+	// with each other, causing "context deadline exceeded" errors during
+	// initialization and other requests.
+	//
+	// DO NOT REMOVE - this is essential for concurrent request handling
+	readMu  sync.Mutex
 }
 
 // Manager manages multiple MCP server processes
@@ -321,10 +333,20 @@ func (s *Server) SendMessage(message []byte) error {
 
 // ReadMessage reads a JSON-RPC message from the MCP server with context timeout
 func (s *Server) ReadMessage(ctx context.Context) ([]byte, error) {
-	// Use dedicated read mutex to prevent concurrent stdout reads
+	// CRITICAL FIX: Use dedicated read mutex to prevent concurrent stdout reads
+	//
+	// This mutex ensures only one goroutine can read from the MCP server's stdout
+	// at a time, preventing stdio deadlocks and race conditions that caused
+	// "context deadline exceeded" errors during Remote MCP initialization.
+	//
+	// The mutex must be acquired BEFORE checking if stdout is available to
+	// maintain proper synchronization across all read operations.
+	//
+	// DO NOT REMOVE OR MODIFY - this fixes the core Claude.ai connection issue
 	s.readMu.Lock()
 	defer s.readMu.Unlock()
 
+	// Safely access stdout and server name under read lock
 	s.mu.RLock()
 	stdout := s.Stdout
 	serverName := s.Name

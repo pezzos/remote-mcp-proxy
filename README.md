@@ -83,9 +83,9 @@ Open Claude.ai (requires Pro, Max, Teams, or Enterprise plan) and add your proxy
  - `https://mcp.your-domain.com/notion-mcp/sse`
  - `https://mcp.your-domain.com/memory-mcp/sse`
 
-**Note**: Our current implementation has known issues with Claude.ai integration. The proxy correctly forwards MCP server capabilities but Claude may still show integrations as "disabled". This is due to missing Remote MCP protocol requirements that are being addressed in upcoming releases.
+✅ **Claude.ai Integration Status**: The Connect button now works reliably! The proxy fully supports Claude.ai Remote MCP integration with proper session management and tool discovery.
 
-**Workaround**: Use the debug endpoints to verify your MCP servers are working:
+**Debug Endpoints**: Use these endpoints to verify your MCP servers are working:
 - Check server status: `https://mcp.your-domain.com/listmcp`
 - Verify tools available: `https://mcp.your-domain.com/listtools/your-server-name`
 
@@ -305,6 +305,29 @@ The proxy is built in Go and consists of:
 - **Standard Library**: Process management (`os/exec`), HTTP/SSE, JSON handling
 - **Alpine Linux**: Minimal Docker base image for production deployment
 
+### Remote MCP Protocol Implementation
+
+The proxy implements the Remote MCP protocol specification to enable Claude.ai integration:
+
+#### Protocol Flow
+1. **OAuth 2.0 Authentication**: Claude.ai authenticates using Bearer tokens via OAuth 2.0 Dynamic Client Registration
+2. **Initialize Handshake**: Synchronous POST request to `/{server}/sse` with initialize message
+3. **Session Management**: Sessions are tracked using `Mcp-Session-Id` header and marked as initialized immediately after successful handshake
+4. **Tool Discovery**: Follow-up requests use the same session to discover and call tools
+5. **SSE Communication**: Server-Sent Events for real-time message delivery (future requests)
+
+#### Critical Implementation Details
+
+**Synchronous Initialize**: Unlike local MCP servers, Claude.ai expects a synchronous JSON response to the initialize POST request, not an asynchronous SSE response.
+
+**Session Initialization**: Sessions MUST be marked as initialized immediately after a successful MCP server response. Waiting for a separate "initialized" notification will cause tool discovery to fail.
+
+**Stdio Concurrency**: MCP server stdout access is serialized using dedicated `readMu` mutex to prevent deadlocks when multiple Claude.ai requests access the same server simultaneously.
+
+**Timeout Handling**: 30-second timeout for initialize responses to accommodate slow npm-based MCP servers. Shorter timeouts cause "context deadline exceeded" errors.
+
+**Tool Name Normalization**: Tool names are automatically converted from hyphenated format (API-get-user) to snake_case (api_get_user) for Claude.ai compatibility, with bidirectional transformation for tool calls.
+
 ## Monitoring and Health Checks
 
 The proxy includes several endpoints for monitoring and debugging:
@@ -339,16 +362,81 @@ These endpoints are useful for:
 
 ## Troubleshooting
 
+### Claude.ai "Connect" Button Issues (RESOLVED ✅)
+
+**Issue**: The Connect button in Claude.ai Remote MCP settings appears to work but then fails, or shows "context deadline exceeded" errors.
+
+**Root Cause**: This was caused by stdio deadlocks during MCP server initialization handshake and improper session management.
+
+**Resolution**: These critical issues have been resolved in the current version:
+
+1. **Stdio Deadlock Fix**: Added dedicated `readMu` mutex to prevent race conditions when multiple requests access the same MCP server stdout
+2. **Session Initialization Fix**: Sessions are now properly marked as initialized after successful handshake
+3. **Timeout Adjustment**: Increased initialize timeout from 10 to 30 seconds for slow npm-based MCP servers
+
+**Verification**: 
+- The Connect button should now work reliably
+- Tools should be properly exposed and usable in Claude.ai
+- Check logs for "Session marked as initialized" messages
+
 ### MCP Server Won't Start
 - Check the command and arguments in your config
 - Verify environment variables are set correctly
 - Look at proxy logs for process spawn errors
 - Ensure required dependencies are available in the container
 
+**Common npm-based MCP server issues**:
+```bash
+# Check if npm packages are available
+docker exec remote-mcp-proxy npm list -g
+
+# Verify MCP server can start manually
+docker exec -it remote-mcp-proxy npx -y @notionhq/notion-mcp-server
+```
+
 ### Connection Issues
 - Ensure the proxy is accessible from Claude.ai
+- Check that Traefik is properly configured with SSL certificates
+- Verify the domain DNS points to your server
+- Ensure port 80/443 are open in your firewall
+
+### "Context Deadline Exceeded" Errors (RESOLVED ✅)
+
+**Issue**: Logs show "context deadline exceeded" during initialize handshake.
+
+**Root Cause**: This was caused by stdio deadlocks and insufficient timeout for MCP server initialization.
+
+**Resolution**: Fixed in current version with dedicated read mutex and increased timeouts.
+
+**If still occurring**:
+- Check if MCP server processes are actually running: `docker exec remote-mcp-proxy ps aux`
+- Verify MCP server responds to direct communication: `docker exec -i remote-mcp-proxy npx -y <server> <<< '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}}}'`
+
+### Session Not Initialized Errors (RESOLVED ✅)
+
+**Issue**: Tools not showing up in Claude.ai even after successful connection.
+
+**Root Cause**: Sessions were not being marked as initialized after successful handshake.
+
+**Resolution**: Fixed - sessions are now automatically marked as initialized when the MCP server responds successfully to the initialize request.
+
+### Tools Not Appearing
+
+If tools don't appear after successful connection:
+
+1. **Check MCP server tools**: 
+   ```bash
+   curl https://mcp.your-domain.com/listtools/your-server-name
+   ```
+
+2. **Verify tool name normalization**: Tool names are automatically converted to snake_case for Claude.ai compatibility
+
+3. **Check server capabilities**: Some MCP servers may not expose tools immediately after startup
+
+### General Connection Debugging
+
 - Check firewall and network configuration
-- Verify SSL/TLS setup for HTTPS endpoints
+- Verify SSL/TLS setup for HTTPS endpoints  
 - Test the SSE endpoint directly: `curl http://localhost:8080/{server-name}/sse`
 - Use the monitoring endpoints to debug:
   - Check if MCP servers are running: `curl http://localhost:8080/listmcp`

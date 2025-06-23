@@ -796,12 +796,25 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 
-	// Read the initialize response from MCP server with timeout
+	// CRITICAL SECTION: Synchronous handshake for Remote MCP protocol compliance
+	//
+	// Remote MCP protocol (as implemented by Claude.ai) expects a synchronous JSON response
+	// to the initialize POST request, NOT an asynchronous SSE response. This section must
+	// remain synchronous to maintain protocol compliance.
+	//
+	// IMPORTANT: The 30-second timeout was increased from 10 seconds to handle slow MCP
+	// server initialization (especially npm-based servers). Reducing this timeout will
+	// cause "context deadline exceeded" errors during initialization.
+	//
+	// The dedicated read goroutine pattern prevents stdio deadlocks that occur when
+	// multiple concurrent requests try to read from the same MCP server stdout stream.
 	log.Printf("INFO: Waiting for initialize response from MCP server %s...", mcpServer.Name)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// Use a dedicated read goroutine to avoid stdio deadlock
+	// CRITICAL FIX: Use dedicated read goroutine to prevent stdio deadlock
+	// This pattern isolates the ReadMessage call to prevent race conditions
+	// when multiple requests access the same MCP server simultaneously
 	type readResult struct {
 		data []byte
 		err  error
@@ -809,6 +822,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 
 	readChan := make(chan readResult, 1)
 	go func() {
+		// ReadMessage uses a dedicated readMu mutex in mcp/manager.go to serialize stdout access
 		data, err := mcpServer.ReadMessage(ctx)
 		readChan <- readResult{data, err}
 	}()
@@ -842,7 +856,17 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 		if err != nil {
 			log.Printf("ERROR: Failed to store connection state: %v", err)
 		} else {
-			// Mark session as initialized immediately after successful initialize response
+			// CRITICAL FIX: Mark session as initialized immediately after successful initialize response
+			// 
+			// This is essential for Remote MCP protocol compliance. Claude.ai expects to be able to
+			// make follow-up requests (like tools/list) immediately after a successful initialize.
+			// The session MUST be marked as initialized here, not waiting for a separate 
+			// "initialized" notification which may never come in Remote MCP.
+			//
+			// Without this, all subsequent requests will fail with "Session not initialized" errors
+			// and the integration will appear to connect but not expose any tools.
+			//
+			// DO NOT REMOVE OR MODIFY THIS SECTION WITHOUT ENSURING ALTERNATIVE INITIALIZATION MECHANISM
 			err := s.translator.HandleInitialized(sessionID)
 			if err != nil {
 				log.Printf("ERROR: Failed to mark session as initialized: %v", err)
