@@ -177,7 +177,7 @@ func (s *Server) Router() http.Handler {
 
 	// MCP server endpoints - pattern: /{server-name}/sse
 	r.HandleFunc("/{server:[^/]+}/sse", s.handleMCPRequest).Methods("GET", "POST")
-	
+
 	// Session endpoints for Remote MCP - pattern: /{server-name}/sessions/{session-id}
 	r.HandleFunc("/{server:[^/]+}/sessions/{sessionId:[^/]+}", s.handleSessionMessage).Methods("POST")
 
@@ -344,7 +344,7 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		}
 		return "none"
 	}())
-	
+
 	// Log all headers starting with X- or Mcp-
 	for name, values := range r.Header {
 		if strings.HasPrefix(strings.ToLower(name), "x-") || strings.HasPrefix(strings.ToLower(name), "mcp-") {
@@ -395,7 +395,7 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcpServer *mcp.Server) {
 	log.Printf("=== SSE CONNECTION START ===")
 	log.Printf("INFO: Setting up SSE connection for server: %s", mcpServer.Name)
-	
+
 	// Get or generate session ID
 	sessionID := s.getSessionID(r)
 	log.Printf("INFO: Session ID for SSE connection: %s", sessionID)
@@ -442,14 +442,14 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	if r.Header.Get("X-Forwarded-Host") != "" {
 		host = r.Header.Get("X-Forwarded-Host")
 	}
-	
+
 	sessionEndpoint := fmt.Sprintf("%s://%s/%s/sessions/%s", scheme, host, mcpServer.Name, sessionID)
 	log.Printf("INFO: Session endpoint URL: %s", sessionEndpoint)
-	
+
 	endpointData := map[string]interface{}{
 		"uri": sessionEndpoint,
 	}
-	
+
 	endpointJSON, err := json.Marshal(endpointData)
 	if err != nil {
 		log.Printf("ERROR: Failed to marshal endpoint data: %v", err)
@@ -457,7 +457,7 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 		s.connectionManager.RemoveConnection(sessionID)
 		return
 	}
-	
+
 	log.Printf("INFO: Endpoint data: %s", string(endpointJSON))
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", string(endpointJSON)); err != nil {
 		log.Printf("ERROR: Failed to write SSE endpoint data: %v", err)
@@ -550,7 +550,7 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpServer *mcp.Server) {
 	log.Printf("=== MCP MESSAGE START ===")
 	log.Printf("INFO: Processing POST message for server: %s", mcpServer.Name)
-	
+
 	// Read the request body
 	log.Printf("INFO: Reading request body...")
 	body, err := io.ReadAll(r.Body)
@@ -670,7 +670,7 @@ func (s *Server) getSessionID(r *http.Request) string {
 		log.Printf("DEBUG: Using existing session ID from Mcp-Session-Id header: %s", sessionID)
 		return sessionID
 	}
-	
+
 	// Try to get session ID from legacy header for backward compatibility
 	if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
 		log.Printf("DEBUG: Using existing session ID from X-Session-ID header: %s", sessionID)

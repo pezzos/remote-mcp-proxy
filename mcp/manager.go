@@ -75,12 +75,12 @@ func (m *Manager) GetServer(name string) (*Server, bool) {
 
 // ServerStatus represents the status of an MCP server
 type ServerStatus struct {
-	Name      string `json:"name"`
-	Running   bool   `json:"running"`
-	PID       int    `json:"pid,omitempty"`
-	Command   string `json:"command"`
-	Args      []string `json:"args,omitempty"`
-	Error     string `json:"error,omitempty"`
+	Name    string   `json:"name"`
+	Running bool     `json:"running"`
+	PID     int      `json:"pid,omitempty"`
+	Command string   `json:"command"`
+	Args    []string `json:"args,omitempty"`
+	Error   string   `json:"error,omitempty"`
 }
 
 // GetAllServers returns status information for all configured servers
