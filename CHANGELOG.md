@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Request Timeout Handling**: Automatic timeout detection for unresponsive MCP methods with 3-second fallback responses
 - **Bearer Token Authentication**: Required OAuth Bearer token authentication for Claude.ai Remote MCP compatibility
 - **OAuth 2.0 Dynamic Client Registration**: Complete OAuth 2.0 DCR implementation with discovery endpoint, client registration, authorization flow, and token exchange following RFC 7591
+- **Tool Name Normalization**: Automatic conversion of tool names from hyphenated format (API-get-user) to snake_case (api_get_user) for Claude.ai compatibility
 
 ### Fixed
 - **Critical Session Management Bug**: Fixed session ID handling to properly use Claude.ai's `Mcp-Session-Id` header instead of generating new sessions for each request
@@ -22,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **MCP Method Compatibility**: Resolved "Method not found" errors by providing empty responses for optional MCP methods that servers don't implement
 - **Unresponsive Request Handling**: Fixed issue where `resources/list` requests would hang indefinitely when MCP servers don't respond, now provides automatic fallback after 3-second timeout
 - **Authentication Deployment Issue**: Identified and documented that authentication code is implemented but not deployed to Docker server
+- **Tool Naming Convention Issue**: Fixed Claude.ai tool discovery by normalizing tool names from hyphenated format (API-get-user) to snake_case (api_get_user) with bidirectional transformation for tool calls
 
 ### Changed
 - **Docker Compose Configuration**: Enhanced with Traefik optimizations including CORS headers, connection persistence, and resource management

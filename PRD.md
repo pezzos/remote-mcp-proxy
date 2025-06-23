@@ -293,11 +293,12 @@ func (s *Server) validateAuthentication(r *http.Request) bool {
 ```
 
 ### Fix Implemented ✅
-**COMPLETED**: OAuth 2.0 Dynamic Client Registration implemented.
+**COMPLETED**: OAuth 2.0 Dynamic Client Registration and Tool Naming Fix implemented.
 - ✅ Bearer token validation with proper WWW-Authenticate headers
 - ✅ OAuth 2.0 DCR endpoints implemented (/.well-known/oauth-authorization-server, /oauth/register, /oauth/authorize, /oauth/token)
 - ✅ Claude.ai authentication flow support with redirect handling
 - ✅ Proper CORS headers for OAuth flow compatibility
+- ✅ Tool name normalization for Claude.ai compatibility (hyphenated → snake_case)
 
 ### OAuth 2.0 Implementation Details
 **Endpoints Added:**
@@ -312,9 +313,16 @@ func (s *Server) validateAuthentication(r *http.Request) bool {
 3. Authorization code flow provides access tokens
 4. Bearer tokens authenticate MCP requests
 
+### Tool Naming Compatibility
+**Issue**: Claude.ai rejects tools with hyphenated names (API-get-user)
+**Solution**: Bidirectional tool name transformation:
+- **Outbound** (tools/list): `API-get-user` → `api_get_user`
+- **Inbound** (tools/call): `api_get_user` → `API-get-user`
+- **Benefits**: Maintains MCP server compatibility while satisfying Claude.ai requirements
+
 ## Success Criteria
 
-1. **Functional**: Any local MCP server can be accessed through Claude.ai web UI ⚠️ **PENDING OAUTH DEPLOYMENT**
+1. **Functional**: Any local MCP server can be accessed through Claude.ai web UI ⚠️ **PENDING COMPLETE DEPLOYMENT**
 2. **Reliable**: Proxy handles process failures and restarts gracefully ✅ **MET**
 3. **Performant**: Low latency translation between protocols ✅ **MET**
 4. **Secure**: Safe execution of configured MCP servers ✅ **MET**

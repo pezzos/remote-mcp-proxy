@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -95,12 +96,18 @@ func (t *Translator) RemoteToMCP(remoteMCPData []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to parse Remote MCP message: %w", err)
 	}
 
+	// Transform tool names back for tool calls (snake_case to original format)
+	params := remoteMsg.Params
+	if remoteMsg.Method == "tools/call" && params != nil {
+		params = t.denormalizeToolNames(params)
+	}
+
 	// Convert to JSON-RPC format
 	jsonrpcMsg := JSONRPCMessage{
 		JSONRPC: "2.0",
 		ID:      remoteMsg.ID,
 		Method:  remoteMsg.Method,
-		Params:  remoteMsg.Params,
+		Params:  params,
 		Result:  remoteMsg.Result,
 		Error:   remoteMsg.Error,
 	}
@@ -121,13 +128,19 @@ func (t *Translator) MCPToRemote(mcpData []byte) ([]byte, error) {
 		messageType = "response"
 	}
 
+	// Transform tool names in tools/list responses for Claude.ai compatibility
+	result := jsonrpcMsg.Result
+	if messageType == "response" && result != nil {
+		result = t.normalizeToolNames(result)
+	}
+
 	// Convert to Remote MCP format
 	remoteMsg := RemoteMCPMessage{
 		Type:   messageType,
 		ID:     jsonrpcMsg.ID,
 		Method: jsonrpcMsg.Method,
 		Params: jsonrpcMsg.Params,
-		Result: jsonrpcMsg.Result,
+		Result: result,
 		Error:  jsonrpcMsg.Error,
 	}
 
@@ -376,6 +389,77 @@ func (t *Translator) HandleMethodNotFoundError(sessionID string, response []byte
 	}
 
 	return fallbackResponse, true
+}
+
+// normalizeToolNames transforms tool names to be Claude.ai compatible (snake_case)
+func (t *Translator) normalizeToolNames(result interface{}) interface{} {
+	// Handle tools/list response format
+	if resultMap, ok := result.(map[string]interface{}); ok {
+		if tools, exists := resultMap["tools"]; exists {
+			if toolsList, ok := tools.([]interface{}); ok {
+				normalizedTools := make([]interface{}, len(toolsList))
+				for i, tool := range toolsList {
+					if toolMap, ok := tool.(map[string]interface{}); ok {
+						// Create a copy of the tool map
+						normalizedTool := make(map[string]interface{})
+						for k, v := range toolMap {
+							normalizedTool[k] = v
+						}
+						
+						// Transform the tool name: convert hyphens to underscores and lowercase
+						if name, exists := normalizedTool["name"]; exists {
+							if nameStr, ok := name.(string); ok {
+								normalizedName := strings.ToLower(strings.ReplaceAll(nameStr, "-", "_"))
+								normalizedTool["name"] = normalizedName
+							}
+						}
+						normalizedTools[i] = normalizedTool
+					} else {
+						normalizedTools[i] = tool
+					}
+				}
+				
+				// Update the result map with normalized tools
+				normalizedResult := make(map[string]interface{})
+				for k, v := range resultMap {
+					normalizedResult[k] = v
+				}
+				normalizedResult["tools"] = normalizedTools
+				return normalizedResult
+			}
+		}
+	}
+	
+	// Return original result if no tools found or transformation not applicable
+	return result
+}
+
+// denormalizeToolNames transforms tool names back from snake_case to original format for tool calls
+func (t *Translator) denormalizeToolNames(params interface{}) interface{} {
+	// Handle tools/call request format
+	if paramsMap, ok := params.(map[string]interface{}); ok {
+		if name, exists := paramsMap["name"]; exists {
+			if nameStr, ok := name.(string); ok {
+				// Convert snake_case back to original API format
+				// api_get_user -> API-get-user
+				originalName := strings.ReplaceAll(nameStr, "_", "-")
+				if strings.HasPrefix(originalName, "api-") {
+					originalName = "API" + originalName[3:]
+				}
+				
+				// Create a copy of the params map with the transformed name
+				normalizedParams := make(map[string]interface{})
+				for k, v := range paramsMap {
+					normalizedParams[k] = v
+				}
+				normalizedParams["name"] = originalName
+				return normalizedParams
+			}
+		}
+	}
+	
+	// Return original params if no transformation needed
+	return params
 }
 
 // CheckTimeouts checks for timed-out requests and generates fallback responses
