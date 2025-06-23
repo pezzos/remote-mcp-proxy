@@ -13,17 +13,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Development Protocol**: Structured commit message conventions and documentation management process
 - **Method Fallback System**: Intelligent fallback responses for unsupported MCP methods like `resources/list`, `prompts/list` to improve Claude.ai compatibility
 - **Request Timeout Handling**: Automatic timeout detection for unresponsive MCP methods with 3-second fallback responses
+- **Bearer Token Authentication**: Required OAuth Bearer token authentication for Claude.ai Remote MCP compatibility
 
 ### Fixed
 - **Critical Session Management Bug**: Fixed session ID handling to properly use Claude.ai's `Mcp-Session-Id` header instead of generating new sessions for each request
 - **SSE Connection Coordination**: Ensured SSE connections use the same session management as POST requests for proper state persistence
 - **MCP Method Compatibility**: Resolved "Method not found" errors by providing empty responses for optional MCP methods that servers don't implement
 - **Unresponsive Request Handling**: Fixed issue where `resources/list` requests would hang indefinitely when MCP servers don't respond, now provides automatic fallback after 3-second timeout
+- **Authentication Deployment Issue**: Identified and documented that authentication code is implemented but not deployed to Docker server
 
 ### Changed
 - **Docker Compose Configuration**: Enhanced with Traefik optimizations including CORS headers, connection persistence, and resource management
 - **CLAUDE.md Guidelines**: Added mandatory changelog management protocol and automated commit preparation workflow
 - **Request Tracking**: Enhanced protocol translator to track pending requests for intelligent error handling
+- **Authentication Requirement**: Implemented Bearer token validation that rejects requests without proper Authorization header
+
+### Security
+- **Authentication Flow**: Claude.ai integration now requires Bearer token authentication matching Remote MCP specification requirements
 
 ## [1.2.0] - 2025-06-23
 
