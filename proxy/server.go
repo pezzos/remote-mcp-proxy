@@ -488,7 +488,7 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 
 	// Handle handshake messages
 	if s.translator.IsHandshakeMessage(jsonrpcMsg.Method) {
-		s.handleHandshakeMessage(w, r, sessionID, &jsonrpcMsg)
+		s.handleHandshakeMessage(w, r, sessionID, &jsonrpcMsg, mcpServer)
 		return
 	}
 
@@ -588,10 +588,10 @@ func (s *Server) getSessionID(r *http.Request) string {
 }
 
 // handleHandshakeMessage handles MCP handshake messages (initialize and initialized)
-func (s *Server) handleHandshakeMessage(w http.ResponseWriter, r *http.Request, sessionID string, msg *protocol.JSONRPCMessage) {
+func (s *Server) handleHandshakeMessage(w http.ResponseWriter, r *http.Request, sessionID string, msg *protocol.JSONRPCMessage, mcpServer *mcp.Server) {
 	switch msg.Method {
 	case "initialize":
-		s.handleInitialize(w, sessionID, msg)
+		s.handleInitialize(w, r, sessionID, msg, mcpServer)
 	case "notifications/initialized":
 		s.handleInitialized(w, sessionID, msg)
 	default:
@@ -600,7 +600,7 @@ func (s *Server) handleHandshakeMessage(w http.ResponseWriter, r *http.Request, 
 }
 
 // handleInitialize handles the initialize request
-func (s *Server) handleInitialize(w http.ResponseWriter, sessionID string, msg *protocol.JSONRPCMessage) {
+func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessionID string, msg *protocol.JSONRPCMessage, mcpServer *mcp.Server) {
 	// Parse initialize parameters
 	var params protocol.InitializeParams
 	if msg.Params != nil {
@@ -611,26 +611,65 @@ func (s *Server) handleInitialize(w http.ResponseWriter, sessionID string, msg *
 		}
 	}
 
-	// Handle initialize request
-	result, err := s.translator.HandleInitialize(sessionID, params)
-	if err != nil {
-		s.sendErrorResponse(w, msg.ID, protocol.InvalidRequest, err.Error(), false)
+	// Check if server is running
+	if !mcpServer.IsRunning() {
+		log.Printf("ERROR: MCP server '%s' is not running for initialize", mcpServer.Name)
+		s.sendErrorResponse(w, msg.ID, protocol.InvalidRequest, fmt.Sprintf("MCP server '%s' is not running", mcpServer.Name), false)
 		return
 	}
 
-	// Send initialize response
-	response := protocol.JSONRPCMessage{
-		JSONRPC: "2.0",
-		ID:      msg.ID,
-		Result:  result,
+	// Forward the initialize request to the actual MCP server
+	initRequestBytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("ERROR: Failed to marshal initialize request: %v", err)
+		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to process initialize request", false)
+		return
 	}
 
+	// Send initialize request to MCP server
+	if err := mcpServer.SendMessage(initRequestBytes); err != nil {
+		log.Printf("ERROR: Failed to send initialize request to MCP server %s: %v", mcpServer.Name, err)
+		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to communicate with MCP server", false)
+		return
+	}
+
+	// Read the initialize response from MCP server with timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	responseBytes, err := mcpServer.ReadMessage(ctx)
+	if err != nil {
+		log.Printf("ERROR: Failed to read initialize response from MCP server %s: %v", mcpServer.Name, err)
+		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to receive response from MCP server", false)
+		return
+	}
+
+	// Parse the MCP server's initialize response
+	var mcpResponse protocol.JSONRPCMessage
+	if err := json.Unmarshal(responseBytes, &mcpResponse); err != nil {
+		log.Printf("ERROR: Failed to parse initialize response from MCP server %s: %v", mcpServer.Name, err)
+		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Invalid response from MCP server", false)
+		return
+	}
+
+	// Store connection state in translator
+	if mcpResponse.Result != nil {
+		_, err := s.translator.HandleInitialize(sessionID, params)
+		if err != nil {
+			log.Printf("ERROR: Failed to store connection state: %v", err)
+		}
+	}
+
+	// Return the MCP server's response directly to Claude
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Session-ID", sessionID)
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(response)
 
-	log.Printf("Sent initialize response for session %s", sessionID)
+	if _, err := w.Write(responseBytes); err != nil {
+		log.Printf("ERROR: Failed to write initialize response: %v", err)
+	} else {
+		log.Printf("INFO: Forwarded initialize response from MCP server %s for session %s", mcpServer.Name, sessionID)
+	}
 }
 
 // handleInitialized handles the initialized notification
