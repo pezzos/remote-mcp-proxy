@@ -6,6 +6,9 @@ services:
     environment:
       - GO_ENV=production
       - CONFIG_FILE=/app/config.json
+      # Optimize for SSE connections
+      - GOMAXPROCS=2
+      - GOMEMLIMIT=400MiB
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -15,15 +18,50 @@ services:
       - proxy
     labels:
       - traefik.enable=true
+      
+      # Router configuration
       - traefik.http.routers.remote-mcp-proxy.rule=Host(`mcp.${DOMAIN}`)
       - traefik.http.routers.remote-mcp-proxy.entrypoints=websecure
       - traefik.http.routers.remote-mcp-proxy.tls.certresolver=myresolver
+      
+      # Service configuration
       - traefik.http.services.remote-mcp-proxy.loadbalancer.server.port=8080
+      
+      # SSE and WebSocket optimizations
+      - traefik.http.services.remote-mcp-proxy.loadbalancer.sticky.cookie=true
+      - traefik.http.services.remote-mcp-proxy.loadbalancer.sticky.cookie.name=mcp-session
+      - traefik.http.services.remote-mcp-proxy.loadbalancer.sticky.cookie.secure=true
+      - traefik.http.services.remote-mcp-proxy.loadbalancer.sticky.cookie.httpOnly=true
+      
+      # Health check configuration
+      - traefik.http.services.remote-mcp-proxy.loadbalancer.healthcheck.path=/health
+      - traefik.http.services.remote-mcp-proxy.loadbalancer.healthcheck.interval=30s
+      - traefik.http.services.remote-mcp-proxy.loadbalancer.healthcheck.timeout=10s
+      
+      # Connection persistence for SSE
+      - traefik.http.routers.remote-mcp-proxy.middlewares=mcp-headers
+      - traefik.http.middlewares.mcp-headers.headers.customrequestheaders.Connection=keep-alive
+      - traefik.http.middlewares.mcp-headers.headers.customrequestheaders.Cache-Control=no-cache
+      
+      # CORS and security headers for MCP
+      - traefik.http.middlewares.mcp-headers.headers.accesscontrolalloworigin=*
+      - traefik.http.middlewares.mcp-headers.headers.accesscontrolallowmethods=GET,POST,OPTIONS
+      - traefik.http.middlewares.mcp-headers.headers.accesscontrolallowheaders=Accept,Authorization,Content-Type,Mcp-Session-Id,X-Requested-With
     deploy:
       resources:
         limits:
           cpus: '0.50'
           memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+      # Single instance deployment with restart policy
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
 
 networks:
   proxy:
