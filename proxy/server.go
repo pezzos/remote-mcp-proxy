@@ -177,6 +177,9 @@ func (s *Server) Router() http.Handler {
 
 	// MCP server endpoints - pattern: /{server-name}/sse
 	r.HandleFunc("/{server:[^/]+}/sse", s.handleMCPRequest).Methods("GET", "POST")
+	
+	// Session endpoints for Remote MCP - pattern: /{server-name}/sessions/{session-id}
+	r.HandleFunc("/{server:[^/]+}/sessions/{sessionId:[^/]+}", s.handleSessionMessage).Methods("POST")
 
 	// Add CORS middleware
 	r.Use(s.corsMiddleware)
@@ -372,18 +375,32 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Session-ID", sessionID)
 
-	// Send initial connection event with connection count
-	if _, err := fmt.Fprintf(w, "event: connected\n"); err != nil {
-		log.Printf("ERROR: Failed to write SSE connected event: %v", err)
+	// Send required "endpoint" event for Remote MCP protocol
+	if _, err := fmt.Fprintf(w, "event: endpoint\n"); err != nil {
+		log.Printf("ERROR: Failed to write SSE endpoint event: %v", err)
 		s.connectionManager.RemoveConnection(sessionID)
 		return
 	}
 
-	connectionData := fmt.Sprintf(`{"type":"connected","server":"%s","sessionId":"%s","connectionCount":%d}`,
-		mcpServer.Name, sessionID, s.connectionManager.GetConnectionCount())
-
-	if _, err := fmt.Fprintf(w, "data: %s\n\n", connectionData); err != nil {
-		log.Printf("ERROR: Failed to write SSE connected data: %v", err)
+	// Construct the session endpoint URL that Claude will use for sending messages
+	scheme := "https"
+	if r.Header.Get("X-Forwarded-Proto") == "" {
+		scheme = "http"
+	}
+	host := r.Host
+	if r.Header.Get("X-Forwarded-Host") != "" {
+		host = r.Header.Get("X-Forwarded-Host")
+	}
+	
+	sessionEndpoint := fmt.Sprintf("%s://%s/%s/sessions/%s", scheme, host, mcpServer.Name, sessionID)
+	
+	endpointData := map[string]interface{}{
+		"uri": sessionEndpoint,
+	}
+	
+	endpointJSON, _ := json.Marshal(endpointData)
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", string(endpointJSON)); err != nil {
+		log.Printf("ERROR: Failed to write SSE endpoint data: %v", err)
 		s.connectionManager.RemoveConnection(sessionID)
 		return
 	}
@@ -663,6 +680,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 	// Return the MCP server's response directly to Claude
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Session-ID", sessionID)
+	w.Header().Set("Mcp-Session-Id", sessionID)
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(responseBytes); err != nil {
@@ -684,6 +702,66 @@ func (s *Server) handleInitialized(w http.ResponseWriter, sessionID string, msg 
 	w.WriteHeader(http.StatusAccepted)
 
 	log.Printf("Connection initialized for session %s", sessionID)
+}
+
+// handleSessionMessage handles POST requests to session endpoints from Claude
+func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	serverName := vars["server"]
+	sessionID := vars["sessionId"]
+
+	log.Printf("INFO: Handling session message for server: %s, session: %s", serverName, sessionID)
+
+	// Validate authentication
+	if !s.validateAuthentication(r) {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Get the MCP server
+	mcpServer, exists := s.mcpManager.GetServer(serverName)
+	if !exists {
+		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
+		return
+	}
+
+	// Check if session exists and is initialized
+	if !s.translator.IsInitialized(sessionID) {
+		http.Error(w, "Session not initialized", http.StatusBadRequest)
+		return
+	}
+
+	// Read the request body
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	// Parse the JSON-RPC message
+	var jsonrpcMsg protocol.JSONRPCMessage
+	if err := json.Unmarshal(body, &jsonrpcMsg); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid JSON-RPC message: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Forward message to MCP server
+	if err := mcpServer.SendMessage(body); err != nil {
+		log.Printf("ERROR: Failed to send message to MCP server %s: %v", serverName, err)
+		http.Error(w, "Failed to send message to MCP server", http.StatusInternalServerError)
+		return
+	}
+
+	// For Remote MCP, responses are sent via SSE, so return 202 Accepted
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Mcp-Session-Id", sessionID)
+	w.WriteHeader(http.StatusAccepted)
+
+	if _, err := w.Write([]byte(`{"status":"accepted"}`)); err != nil {
+		log.Printf("ERROR: Failed to write session message response: %v", err)
+	} else {
+		log.Printf("INFO: Session message accepted for server %s, session %s", serverName, sessionID)
+	}
 }
 
 // sendErrorResponse sends a JSON-RPC error response
