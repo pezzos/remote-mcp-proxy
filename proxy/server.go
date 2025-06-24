@@ -432,6 +432,17 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	sessionID := s.getSessionID(r)
 	log.Printf("INFO: Session ID for SSE connection: %s", sessionID)
 
+	// CRITICAL FIX: Register session in translator immediately
+	//
+	// Create an uninitialized session state so that IsInitialized() checks
+	// will recognize the session exists (returning false, as expected) rather
+	// than treating it as completely unknown.
+	//
+	// This allows the session endpoint to accept initialize requests for
+	// sessions created via SSE connections.
+	s.translator.RegisterSession(sessionID)
+	log.Printf("SUCCESS: Session %s registered in translator", sessionID)
+
 	// Create cancellable context for this connection
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -523,10 +534,18 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 			log.Printf("INFO: SSE context cancelled for server %s, session %s", mcpServer.Name, sessionID)
 			return
 		case <-ticker.C:
-			// Only process messages if connection is initialized
-			if !s.translator.IsInitialized(sessionID) {
-				continue
-			}
+			// CRITICAL FIX: Remove initialization check to prevent SSE deadlock
+			//
+			// The previous logic created a chicken-and-egg problem:
+			// 1. SSE connection waits for session initialization
+			// 2. Claude.ai needs active SSE to send initialize request
+			// 3. Session endpoint rejects uninitialized sessions -> DEADLOCK
+			//
+			// Claude.ai Remote MCP protocol requires SSE to be active BEFORE
+			// initialization, not after. The SSE connection provides the session
+			// endpoint URL, then Claude.ai uses that endpoint to initialize.
+			//
+			// We must process ALL messages (including initialize) through SSE flow.
 
 			// Check for timed-out requests first (3 second timeout)
 			timeoutMessages := s.translator.CheckTimeouts(sessionID, 3*time.Second)
@@ -850,20 +869,15 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 		readChan <- readResult{data, err}
 	}()
 
-	var responseBytes []byte
-	select {
-	case result := <-readChan:
-		if result.err != nil {
-			log.Printf("ERROR: Failed to read initialize response from MCP server %s: %v", mcpServer.Name, result.err)
-			s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to receive response from MCP server", false)
-			return
-		}
-		responseBytes = result.data
-	case <-time.After(30 * time.Second):
-		log.Printf("ERROR: Timeout waiting for initialize response from MCP server %s", mcpServer.Name)
-		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Timeout waiting for MCP server response", false)
+	// Wait for the ReadMessage goroutine to complete
+	// The context timeout in ReadMessage will handle timeouts properly
+	result := <-readChan
+	if result.err != nil {
+		log.Printf("ERROR: Failed to read initialize response from MCP server %s: %v", mcpServer.Name, result.err)
+		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to receive response from MCP server", false)
 		return
 	}
+	responseBytes := result.data
 
 	// Parse the MCP server's initialize response
 	var mcpResponse protocol.JSONRPCMessage
@@ -952,13 +966,7 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if session exists and is initialized
-	if !s.translator.IsInitialized(sessionID) {
-		http.Error(w, "Session not initialized", http.StatusBadRequest)
-		return
-	}
-
-	// Read the request body
+	// Read the request body first to check message type
 	log.Printf("INFO: Reading session message body...")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -982,20 +990,50 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	log.Printf("SUCCESS: Session message JSON-RPC parsed")
 	log.Printf("INFO: Session message method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
 
+	// CRITICAL FIX: Allow handshake messages on uninitialized sessions
+	//
+	// For Remote MCP protocol compliance, the session endpoint must accept
+	// initialize requests even when the session is not yet initialized.
+	// This breaks the deadlock where Claude.ai cannot initialize because
+	// session endpoints reject uninitialized requests.
+	
+	isHandshake := s.translator.IsHandshakeMessage(jsonrpcMsg.Method)
+	isInitialized := s.translator.IsInitialized(sessionID)
+	
+	log.Printf("DEBUG: Session %s - Method: %s, IsHandshake: %v, IsInitialized: %v", 
+		sessionID, jsonrpcMsg.Method, isHandshake, isInitialized)
+	
+	if !isHandshake && !isInitialized {
+		log.Printf("ERROR: Session %s not initialized for non-handshake method %s", sessionID, jsonrpcMsg.Method)
+		http.Error(w, "Session not initialized", http.StatusBadRequest)
+		return
+	}
+
 	// Track the request for potential fallback handling
 	if jsonrpcMsg.Method != "" && jsonrpcMsg.ID != nil {
 		s.translator.TrackRequest(sessionID, jsonrpcMsg.ID, jsonrpcMsg.Method)
 		log.Printf("DEBUG: Tracking session request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
 	}
 
-	// Forward message to MCP server
+	// CRITICAL FIX: Handle handshake messages synchronously in session endpoint
+	//
+	// Remote MCP protocol requires initialize requests to receive synchronous
+	// responses, not asynchronous SSE responses. This ensures proper handshake
+	// completion before Claude.ai proceeds with tool discovery.
+	if s.translator.IsHandshakeMessage(jsonrpcMsg.Method) {
+		log.Printf("INFO: Handling handshake message %s in session endpoint", jsonrpcMsg.Method)
+		s.handleHandshakeMessage(w, r, sessionID, &jsonrpcMsg, mcpServer)
+		return
+	}
+
+	// Forward non-handshake messages to MCP server (responses via SSE)
 	if err := mcpServer.SendMessage(body); err != nil {
 		log.Printf("ERROR: Failed to send message to MCP server %s: %v", serverName, err)
 		http.Error(w, "Failed to send message to MCP server", http.StatusInternalServerError)
 		return
 	}
 
-	// For Remote MCP, responses are sent via SSE, so return 202 Accepted
+	// For Remote MCP, non-handshake responses are sent via SSE, so return 202 Accepted
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Mcp-Session-Id", sessionID)
 	w.WriteHeader(http.StatusAccepted)

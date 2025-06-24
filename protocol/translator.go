@@ -248,6 +248,23 @@ const (
 	ProxyServerVersion = "1.0.0"
 )
 
+// RegisterSession creates an uninitialized session for SSE connections
+func (t *Translator) RegisterSession(sessionID string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Create uninitialized session state
+	state := &ConnectionState{
+		Initialized:     false,
+		ProtocolVersion: MCPProtocolVersion,
+		Capabilities:    make(map[string]interface{}),
+		SessionID:       sessionID,
+		PendingRequests: make(map[interface{}]*PendingRequest),
+	}
+
+	t.connections[sessionID] = state
+}
+
 // HandleInitialize processes the MCP initialize request
 func (t *Translator) HandleInitialize(sessionID string, params InitializeParams) (*InitializeResult, error) {
 	t.mu.Lock()
@@ -267,11 +284,18 @@ func (t *Translator) HandleInitialize(sessionID string, params InitializeParams)
 		PendingRequests: make(map[interface{}]*PendingRequest),
 	}
 
-	// Set basic capabilities for proxy
+	// Set enhanced capabilities for Remote MCP compatibility
+	// Claude.ai expects specific capability indicators to enable tool discovery
 	state.Capabilities = map[string]interface{}{
-		"tools":     map[string]interface{}{},
-		"resources": map[string]interface{}{},
-		"prompts":   map[string]interface{}{},
+		"tools": map[string]interface{}{
+			"listChanged": true, // Indicates tools can be discovered via tools/list
+		},
+		"resources": map[string]interface{}{
+			"listChanged": true, // Indicates resources can be discovered
+		},
+		"prompts": map[string]interface{}{
+			"listChanged": true, // Indicates prompts can be discovered
+		},
 	}
 
 	t.connections[sessionID] = state
