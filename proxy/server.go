@@ -547,97 +547,27 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 			//
 			// We must process ALL messages (including initialize) through SSE flow.
 
-			// Check for timed-out requests first (3 second timeout)
-			timeoutMessages := s.translator.CheckTimeouts(sessionID, 3*time.Second)
-			for _, timeoutMessage := range timeoutMessages {
-				log.Printf("INFO: Sending timeout fallback response for server %s", mcpServer.Name)
-
-				// Translate and send timeout fallback message
-				remoteMCPMessage, err := s.translator.MCPToRemote(timeoutMessage)
-				if err != nil {
-					log.Printf("ERROR: Error translating timeout fallback message for server %s: %v", mcpServer.Name, err)
-					continue
-				}
-
-				log.Printf("DEBUG: Translated timeout fallback for SSE: %s", string(remoteMCPMessage))
-
-				// Write SSE event for timeout fallback
-				if _, err := fmt.Fprintf(w, "event: message\n"); err != nil {
-					log.Printf("ERROR: Failed to write SSE event header for timeout fallback for server %s: %v", mcpServer.Name, err)
-					return
-				}
-
-				if _, err := fmt.Fprintf(w, "data: %s\n\n", string(remoteMCPMessage)); err != nil {
-					log.Printf("ERROR: Failed to write SSE data for timeout fallback for server %s: %v", mcpServer.Name, err)
-					return
-				}
-
-				if flusher, ok := w.(http.Flusher); ok {
-					flusher.Flush()
-				}
-			}
-
-			// Create a timeout context for reading messages
-			readCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-
-			// Read message from MCP server with timeout
-			message, err := mcpServer.ReadMessage(readCtx)
-			cancel()
-
-			if err != nil {
-				// Handle different types of errors appropriately
-				if err == context.DeadlineExceeded {
-					// Timeout is normal, just continue
-					continue
-				} else if err == context.Canceled {
-					log.Printf("INFO: Read cancelled for server %s", mcpServer.Name)
-					return
-				} else if err.Error() != "EOF" {
-					log.Printf("ERROR: Error reading from MCP server %s: %v", mcpServer.Name, err)
-				}
-				continue
-			}
-
-			// Check for "Method not found" errors and handle with fallbacks
-			if fallbackMessage, handled := s.translator.HandleMethodNotFoundError(sessionID, message); handled {
-				log.Printf("INFO: Provided fallback response for unsupported method in server %s", mcpServer.Name)
-				message = fallbackMessage
-			}
-
-			// Translate and send message
-			remoteMCPMessage, err := s.translator.MCPToRemote(message)
-			if err != nil {
-				log.Printf("ERROR: Error translating MCP message for server %s: %v", mcpServer.Name, err)
-				continue
-			}
-
-			log.Printf("DEBUG: Translated message for SSE: %s", string(remoteMCPMessage))
-
-			log.Printf("=== SSE MESSAGE TRANSMISSION DEBUG ===")
-			log.Printf("DEBUG: Sending SSE message to Claude.ai for server %s, session %s", mcpServer.Name, sessionID)
-			log.Printf("DEBUG: SSE message size: %d bytes", len(remoteMCPMessage))
-			log.Printf("DEBUG: SSE event format validation: event=message, data follows")
-
-			// Write SSE event with error handling
-			if _, err := fmt.Fprintf(w, "event: message\n"); err != nil {
-				log.Printf("ERROR: Failed to write SSE event header for server %s: %v", mcpServer.Name, err)
-				return
-			}
-
-			if _, err := fmt.Fprintf(w, "data: %s\n\n", string(remoteMCPMessage)); err != nil {
-				log.Printf("ERROR: Failed to write SSE data for server %s: %v", mcpServer.Name, err)
-				return
-			}
-
-			if flusher, ok := w.(http.Flusher); ok {
-				flusher.Flush()
-			} else {
-				log.Printf("WARNING: ResponseWriter does not support flushing for server %s", mcpServer.Name)
-			}
-
-			log.Printf("DEBUG: Sent SSE message for server %s", mcpServer.Name)
-			log.Printf("SUCCESS: SSE message successfully transmitted to Claude.ai")
-			log.Printf("=== SSE MESSAGE TRANSMISSION DEBUG END ===")
+			// CRITICAL ARCHITECTURAL FIX: Remove continuous MCP server polling
+			//
+			// The previous implementation constantly polled the MCP server for messages,
+			// but MCP servers only respond when they receive requests. This caused:
+			// - Thousands of timeout messages
+			// - Blocked SSE connections  
+			// - Failed tool discovery
+			//
+			// Remote MCP protocol should be REQUEST-DRIVEN, not polling-driven:
+			// 1. SSE sends endpoint event and waits
+			// 2. Claude.ai sends requests via session endpoint
+			// 3. Session endpoint handles requests synchronously
+			// 4. Responses sent directly (not via SSE for most requests)
+			//
+			// For now, SSE just maintains the connection and waits.
+			// Future: Add channel-based event system for notifications if needed.
+			
+			log.Printf("DEBUG: SSE connection active for server %s, session %s - waiting for requests", mcpServer.Name, sessionID)
+			
+			// Just keep the connection alive - no more continuous polling
+			time.Sleep(1 * time.Second)
 		}
 	}
 }
@@ -675,7 +605,26 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 	sessionID := s.getSessionID(r)
 	log.Printf("INFO: Session ID: %s", sessionID)
 
-	// Handle handshake messages
+	// CRITICAL FIX: Only handle handshake messages if this is NOT a session endpoint request
+	//
+	// Session endpoint requests (/{server}/sessions/{sessionId}) should be handled 
+	// entirely by handleSessionMessage to prevent duplicate ReadMessage calls.
+	// The handleMCPMessage function should only handle direct SSE endpoint requests.
+	//
+	// Check if this request is coming to a session endpoint by looking at the URL path
+	isSessionEndpointRequest := strings.Contains(r.URL.Path, "/sessions/")
+	
+	log.Printf("INFO: Checking request type - URL: %s, IsSessionEndpoint: %v", r.URL.Path, isSessionEndpointRequest)
+	
+	if isSessionEndpointRequest {
+		log.Printf("ERROR: Session endpoint request incorrectly routed to handleMCPMessage")
+		log.Printf("ERROR: This should not happen - check routing configuration")
+		log.Printf("=== MCP MESSAGE END (ROUTING ERROR) ===")
+		http.Error(w, "Internal routing error", http.StatusInternalServerError)
+		return
+	}
+
+	// Handle handshake messages for direct SSE endpoint requests only
 	log.Printf("INFO: Checking if handshake message...")
 	if s.translator.IsHandshakeMessage(jsonrpcMsg.Method) {
 		log.Printf("INFO: Processing handshake message: %s", jsonrpcMsg.Method)
@@ -1015,33 +964,67 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 		log.Printf("DEBUG: Tracking session request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
 	}
 
-	// CRITICAL FIX: Handle handshake messages synchronously in session endpoint
+	// CRITICAL ARCHITECTURAL FIX: Handle ALL session endpoint requests synchronously
 	//
-	// Remote MCP protocol requires initialize requests to receive synchronous
-	// responses, not asynchronous SSE responses. This ensures proper handshake
-	// completion before Claude.ai proceeds with tool discovery.
-	if s.translator.IsHandshakeMessage(jsonrpcMsg.Method) {
-		log.Printf("INFO: Handling handshake message %s in session endpoint", jsonrpcMsg.Method)
-		s.handleHandshakeMessage(w, r, sessionID, &jsonrpcMsg, mcpServer)
-		return
-	}
-
-	// Forward non-handshake messages to MCP server (responses via SSE)
+	// Previous design only handled handshake messages synchronously and sent other
+	// requests (tools/list, tools/call) asynchronously via SSE. This caused issues:
+	// - SSE polling loop blocked everything
+	// - Responses never reached Claude.ai
+	// - Tool discovery failed
+	//
+	// New design: ALL session endpoint requests are synchronous:
+	// - initialize -> synchronous response
+	// - tools/list -> synchronous response  
+	// - tools/call -> synchronous response
+	//
+	// This is more aligned with how most Remote MCP implementations work.
+	
+	log.Printf("INFO: Handling session request %s synchronously", jsonrpcMsg.Method)
+	
+	// Send request to MCP server
 	if err := mcpServer.SendMessage(body); err != nil {
 		log.Printf("ERROR: Failed to send message to MCP server %s: %v", serverName, err)
 		http.Error(w, "Failed to send message to MCP server", http.StatusInternalServerError)
 		return
 	}
-
-	// For Remote MCP, non-handshake responses are sent via SSE, so return 202 Accepted
+	
+	// Read response from MCP server synchronously
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
+	responseBytes, err := mcpServer.ReadMessage(ctx)
+	if err != nil {
+		log.Printf("ERROR: Failed to read response from MCP server %s: %v", serverName, err)
+		http.Error(w, "Failed to receive response from MCP server", http.StatusInternalServerError)
+		return
+	}
+	
+	// Handle special processing for handshake messages
+	if s.translator.IsHandshakeMessage(jsonrpcMsg.Method) {
+		// Parse response and update session state for handshake messages
+		var mcpResponse protocol.JSONRPCMessage
+		if err := json.Unmarshal(responseBytes, &mcpResponse); err == nil && mcpResponse.Result != nil {
+			// Mark session as initialized after successful initialize
+			if jsonrpcMsg.Method == "initialize" {
+				err := s.translator.HandleInitialized(sessionID)
+				if err != nil {
+					log.Printf("ERROR: Failed to mark session as initialized: %v", err)
+				} else {
+					log.Printf("INFO: Session %s marked as initialized for server %s", sessionID, serverName)
+				}
+			}
+		}
+	}
+	
+	// Return response directly to Claude.ai
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Mcp-Session-Id", sessionID)
-	w.WriteHeader(http.StatusAccepted)
-
-	if _, err := w.Write([]byte(`{"status":"accepted"}`)); err != nil {
-		log.Printf("ERROR: Failed to write session message response: %v", err)
+	w.WriteHeader(http.StatusOK)
+	
+	if _, err := w.Write(responseBytes); err != nil {
+		log.Printf("ERROR: Failed to write session response: %v", err)
 	} else {
-		log.Printf("INFO: Session message accepted for server %s, session %s", serverName, sessionID)
+		log.Printf("INFO: Successfully returned synchronous response for %s to session %s", jsonrpcMsg.Method, sessionID)
 	}
 }
 
