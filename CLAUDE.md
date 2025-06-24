@@ -58,6 +58,66 @@ The service expects a configuration file mounted at `/app/config.json` with the 
 - Process lifecycle management ensures MCP servers are properly started/stopped
 - Error handling includes both HTTP-level errors and MCP protocol errors
 
+## Investigation Methodology
+
+### Complex Problem-Solving Protocol
+When encountering complex technical issues that require multi-step analysis:
+
+1. **Create Investigation Structure**:
+   - Use TodoWrite to break down the problem into specific, actionable steps
+   - Create or update INVESTIGATIONS.md to document findings
+   - Establish clear success criteria and investigation phases
+
+2. **Systematic Root Cause Analysis**:
+   - Document all symptoms and evidence observed
+   - Test hypotheses systematically using available tools
+   - Record breakthroughs and dead ends in INVESTIGATIONS.md
+   - Update todo status in real-time as investigation progresses
+
+3. **Evidence-Based Conclusions**:
+   - Support all conclusions with specific evidence
+   - Cross-reference findings across multiple sources
+   - Validate solutions through testing before marking todos complete
+
+### Investigation Documentation Format
+Use this structure in INVESTIGATIONS.md:
+- **Problem Statement**: Clear description of the issue
+- **Evidence**: Observable symptoms and test results
+- **Hypotheses**: Potential root causes with priority levels
+- **Breakthroughs**: Key discoveries that change understanding
+- **Solution**: Final resolution with validation evidence
+
+## Documentation Management Protocol
+
+### Multi-Document Synchronization
+When making changes that affect multiple documentation files, update ALL relevant documents:
+
+1. **Core Documentation Files**:
+   - `README.md`: User-facing setup and usage instructions
+   - `PRD.md`: Technical implementation phases and architecture
+   - `CHANGELOG.md`: Version history and change tracking
+   - `INVESTIGATIONS.md`: Problem analysis and solutions
+
+2. **Update Triggers**:
+   Automatically update documentation when:
+   - Completing implementation phases from PRD.md
+   - Adding new features or major functionality changes
+   - Changing URL formats, configuration, or deployment processes
+   - Fixing critical bugs or security issues
+   - Making breaking changes to APIs or protocols
+
+3. **Cross-Reference Requirements**:
+   - Link related sections across documents
+   - Ensure version compatibility information is consistent
+   - Update all examples when changing URL formats or configuration
+   - Maintain consistency in terminology and naming conventions
+
+4. **Documentation Update Sequence**:
+   - Update technical details in PRD.md first
+   - Sync user-facing changes to README.md
+   - Document changes in CHANGELOG.md with proper versioning
+   - Reference solutions in INVESTIGATIONS.md when applicable
+
 ## Documentation Management
 
 ### Automatic Updates
@@ -297,6 +357,37 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
     log.Printf("INFO: Processing MCP request for session %s", sessionID)
     // ... handle request
 }
+```
+
+## Testing Requirements
+
+### Comprehensive Testing Strategy
+- **Unit Tests**: Test individual components and functions
+- **Integration Tests**: Test component interactions and workflows
+- **Configuration Tests**: Test environment variables and configuration loading
+- **Protocol Tests**: Test Remote MCP protocol compliance and URL routing
+- **Regression Tests**: Ensure changes don't break existing functionality
+
+### Required Test Types by Feature:
+- **URL Routing Changes**: Test subdomain extraction, validation, and routing
+- **Environment Configuration**: Test variable loading, defaults, and precedence
+- **Protocol Changes**: Test Remote MCP compliance and message formats
+- **API Changes**: Test all endpoints and response formats
+
+### Test Implementation Standards:
+- Create test files alongside implementation (`component_test.go`)
+- Use table-driven tests for multiple scenarios
+- Include both positive and negative test cases
+- Test error conditions and edge cases
+- Validate all public methods and critical private methods
+
+### Pre-deployment Testing:
+```bash
+# Required test sequence before deployment
+go test ./...                    # All tests must pass
+go test -race ./...             # Race condition detection
+go test -cover ./...            # Ensure adequate coverage
+go build -o remote-mcp-proxy .  # Verify compilation
 ```
 
 ### Build and Test Workflow
