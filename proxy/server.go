@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"remote-mcp-proxy/config"
 	"remote-mcp-proxy/mcp"
 	"remote-mcp-proxy/protocol"
 )
@@ -23,6 +24,7 @@ type Server struct {
 	mcpManager        *mcp.Manager
 	translator        *protocol.Translator
 	connectionManager *ConnectionManager
+	config            *config.Config
 }
 
 // ConnectionManager manages active SSE connections
@@ -130,20 +132,29 @@ func (cm *ConnectionManager) CleanupStaleConnections(maxAge time.Duration) {
 	}
 }
 
-// NewServer creates a new proxy server
+// NewServer creates a new proxy server (backward compatibility)
 func NewServer(mcpManager *mcp.Manager) *Server {
+	return NewServerWithConfig(mcpManager, nil)
+}
+
+// NewServerWithConfig creates a new proxy server with configuration
+func NewServerWithConfig(mcpManager *mcp.Manager, cfg *config.Config) *Server {
 	const maxConnections = 100 // Configurable connection limit
 
 	server := &Server{
 		mcpManager:        mcpManager,
 		translator:        protocol.NewTranslator(),
 		connectionManager: NewConnectionManager(maxConnections),
+		config:            cfg,
 	}
 
 	// Start background cleanup routine
 	go server.startConnectionCleanup()
 
 	log.Printf("INFO: Created proxy server with max %d connections", maxConnections)
+	if cfg != nil {
+		log.Printf("INFO: Configured domain: %s", cfg.GetDomain())
+	}
 	return server
 }
 
@@ -162,17 +173,59 @@ func (s *Server) startConnectionCleanup() {
 	}
 }
 
+// subdomainMiddleware extracts MCP server name from subdomain
+func (s *Server) subdomainMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Extract server name from subdomain: memory.mcp.domain.com → "memory"
+		host := r.Host
+		
+		// Remove port if present
+		if colonIndex := strings.Index(host, ":"); colonIndex != -1 {
+			host = host[:colonIndex]
+		}
+		
+		parts := strings.Split(host, ".")
+		
+		// Expected format: {server}.mcp.{domain}
+		if len(parts) >= 3 && parts[1] == "mcp" {
+			serverName := parts[0]
+			log.Printf("DEBUG: Extracted server name '%s' from host '%s'", serverName, r.Host)
+			
+			// Validate server exists in configuration (if config is available)
+			if s.config != nil {
+				if _, exists := s.config.MCPServers[serverName]; !exists {
+					log.Printf("DEBUG: Server '%s' not found in configuration", serverName)
+					// Don't add to context if server doesn't exist
+					next.ServeHTTP(w, r)
+					return
+				}
+			}
+			
+			// Add server name to request context
+			ctx := context.WithValue(r.Context(), "mcpServer", serverName)
+			r = r.WithContext(ctx)
+		} else {
+			log.Printf("DEBUG: Host '%s' doesn't match subdomain pattern {server}.mcp.{domain}", r.Host)
+		}
+		
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Router returns the HTTP router with all routes configured
 func (s *Server) Router() http.Handler {
 	r := mux.NewRouter()
 
-	// Health check endpoint
+	// Apply subdomain detection middleware
+	r.Use(s.subdomainMiddleware)
+
+	// Root-level endpoints (standard Remote MCP format)
+	r.HandleFunc("/sse", s.handleMCPRequest).Methods("GET", "POST")
+	r.HandleFunc("/sessions/{sessionId:[^/]+}", s.handleSessionMessage).Methods("POST")
+
+	// Utility endpoints
 	r.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
-
-	// List all configured MCP servers
 	r.HandleFunc("/listmcp", s.handleListMCP).Methods("GET", "OPTIONS")
-
-	// List tools for a specific MCP server
 	r.HandleFunc("/listtools/{server:[^/]+}", s.handleListTools).Methods("GET", "OPTIONS")
 
 	// OAuth 2.0 Dynamic Client Registration endpoints
@@ -180,12 +233,6 @@ func (s *Server) Router() http.Handler {
 	r.HandleFunc("/oauth/register", s.handleClientRegistration).Methods("POST", "OPTIONS")
 	r.HandleFunc("/oauth/authorize", s.handleAuthorize).Methods("GET", "POST")
 	r.HandleFunc("/oauth/token", s.handleToken).Methods("POST", "OPTIONS")
-
-	// MCP server endpoints - pattern: /{server-name}/sse
-	r.HandleFunc("/{server:[^/]+}/sse", s.handleMCPRequest).Methods("GET", "POST")
-
-	// Session endpoints for Remote MCP - pattern: /{server-name}/sessions/{session-id}
-	r.HandleFunc("/{server:[^/]+}/sessions/{sessionId:[^/]+}", s.handleSessionMessage).Methods("POST")
 
 	// Add CORS middleware
 	r.Use(s.corsMiddleware)
@@ -352,12 +399,25 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 
 // handleMCPRequest handles Remote MCP requests and forwards them to local MCP servers
 func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	serverName := vars["server"]
+	// Extract server name from context (set by subdomain middleware)
+	serverName, ok := r.Context().Value("mcpServer").(string)
+	if !ok || serverName == "" {
+		log.Printf("ERROR: No server name found in subdomain context for host: %s", r.Host)
+		http.Error(w, "Invalid subdomain format. Expected: {server}.mcp.{domain}", http.StatusBadRequest)
+		return
+	}
+
+	// Validate server exists
+	mcpServer, exists := s.mcpManager.GetServer(serverName)
+	if !exists {
+		log.Printf("ERROR: MCP server '%s' not found", serverName)
+		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
+		return
+	}
 
 	// Comprehensive request logging
 	log.Printf("=== MCP REQUEST START ===")
-	log.Printf("INFO: Method: %s, URL: %s, Server: %s", r.Method, r.URL.String(), serverName)
+	log.Printf("INFO: Method: %s, URL: %s, Server: %s (from subdomain)", r.Method, r.URL.String(), serverName)
 	log.Printf("INFO: Remote Address: %s", r.RemoteAddr)
 	log.Printf("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
 	log.Printf("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
@@ -394,15 +454,6 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("SUCCESS: Authentication passed")
 
-	// Get the MCP server
-	log.Printf("INFO: Looking up MCP server: %s", serverName)
-	mcpServer, exists := s.mcpManager.GetServer(serverName)
-	if !exists {
-		log.Printf("ERROR: MCP server '%s' not found", serverName)
-		log.Printf("=== MCP REQUEST END (SERVER NOT FOUND) ===")
-		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
-		return
-	}
 	log.Printf("SUCCESS: Found MCP server: %s (running: %v)", serverName, mcpServer.IsRunning())
 
 	// Handle based on request method
@@ -486,7 +537,7 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 		host = r.Header.Get("X-Forwarded-Host")
 	}
 
-	sessionEndpoint := fmt.Sprintf("%s://%s/%s/sessions/%s", scheme, host, mcpServer.Name, sessionID)
+	sessionEndpoint := fmt.Sprintf("%s://%s/sessions/%s", scheme, host, sessionID)
 	log.Printf("INFO: Session endpoint URL: %s", sessionEndpoint)
 
 	endpointData := map[string]interface{}{
@@ -891,12 +942,19 @@ func (s *Server) handleInitialized(w http.ResponseWriter, sessionID string, msg 
 
 // handleSessionMessage handles POST requests to session endpoints from Claude
 func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
+	// Extract server name from context (set by subdomain middleware)
+	serverName, ok := r.Context().Value("mcpServer").(string)
+	if !ok || serverName == "" {
+		log.Printf("ERROR: No server name found in subdomain context for host: %s", r.Host)
+		http.Error(w, "Invalid subdomain format. Expected: {server}.mcp.{domain}", http.StatusBadRequest)
+		return
+	}
+
 	vars := mux.Vars(r)
-	serverName := vars["server"]
 	sessionID := vars["sessionId"]
 
 	log.Printf("=== SESSION MESSAGE START ===")
-	log.Printf("INFO: Handling session message for server: %s, session: %s", serverName, sessionID)
+	log.Printf("INFO: Handling session message for server: %s (from subdomain), session: %s", serverName, sessionID)
 	log.Printf("INFO: Method: %s, URL: %s", r.Method, r.URL.String())
 	log.Printf("INFO: Remote Address: %s", r.RemoteAddr)
 	log.Printf("INFO: User-Agent: %s", r.Header.Get("User-Agent"))

@@ -35,18 +35,19 @@ func main() {
 		log.Fatalf("Failed to start MCP servers: %v", err)
 	}
 
-	// Create proxy server
-	proxyServer := proxy.NewServer(mcpManager)
+	// Create proxy server with configuration
+	proxyServer := proxy.NewServerWithConfig(mcpManager, cfg)
 
-	// Start HTTP server
+	// Start HTTP server on configured port
+	addr := ":" + cfg.GetPort()
 	server := &http.Server{
-		Addr:    ":8080",
+		Addr:    addr,
 		Handler: proxyServer.Router(),
 	}
 
 	// Start server in goroutine
 	go func() {
-		log.Println("Server starting on :8080")
+		log.Printf("Server starting on %s (Domain: %s)", addr, cfg.GetDomain())
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)
 		}

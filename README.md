@@ -75,13 +75,30 @@ docker-compose up -d
 
 This will deploy the service with Traefik reverse proxy integration, making it accessible at `mcp.{DOMAIN}` with automatic HTTPS.
 
-### 5. Configure Claude.ai
+### 5. Configure DNS Wildcard (Required)
+
+Configure wildcard DNS for dynamic subdomain routing:
+
+**DNS Setup Example (Cloudflare)**:
+```dns
+Type: A
+Name: *.mcp
+Content: YOUR_SERVER_IP
+Proxy status: Proxied (orange cloud)
+```
+
+**For other DNS providers**, create an A record:
+```dns
+*.mcp.your-domain.com    A    YOUR_SERVER_IP
+```
+
+### 6. Configure Claude.ai
 
 Open Claude.ai (requires Pro, Max, Teams, or Enterprise plan) and add your proxy URLs under Settings > Integrations:
 
-**Important**: Use these exact URLs for Claude integration:
- - `https://mcp.your-domain.com/notion-mcp/sse`
- - `https://mcp.your-domain.com/memory-mcp/sse`
+**New Subdomain-based URLs** (Required format):
+ - `https://notion-mcp.mcp.your-domain.com/sse`
+ - `https://memory-mcp.mcp.your-domain.com/sse`
 
 ✅ **Claude.ai Integration Status**: The Connect button now works reliably! The proxy fully supports Claude.ai Remote MCP integration with proper session management and tool discovery.
 
@@ -89,14 +106,27 @@ Open Claude.ai (requires Pro, Max, Teams, or Enterprise plan) and add your proxy
 - Check server status: `https://mcp.your-domain.com/listmcp`
 - Verify tools available: `https://mcp.your-domain.com/listtools/your-server-name`
 
-## URL Structure
+## URL Structure (Updated)
 
-Each MCP server is available at:
+**New Format**: Each MCP server is available at:
 ```
-https://mcp.{DOMAIN}/{server-name}/sse
+https://{server-name}.mcp.{DOMAIN}/sse
 ```
+
+**Examples**:
+- `https://memory.mcp.your-domain.com/sse`
+- `https://sequential-thinking.mcp.your-domain.com/sse`
+- `https://notion.mcp.your-domain.com/sse`
 
 Where `{DOMAIN}` is set in your `.env` file and `{server-name}` matches the key in your `config.json` file.
+
+### Why Subdomain Format?
+
+Claude.ai expects Remote MCP endpoints at root level (`/sse`), not path-based routing. This subdomain approach:
+- ✅ Matches Remote MCP standard format
+- ✅ Works with dynamic server addition
+- ✅ Provides clean separation between servers
+- ✅ Enables automatic URL generation
 
 ## Configuration
 
@@ -122,7 +152,7 @@ The proxy uses the same configuration format as Claude Desktop's `claude_desktop
 
 The following environment variables are used by the Docker Compose setup:
 
-- **`DOMAIN`**: Your base domain name (e.g., `example.com`). The service will be accessible at `mcp.{DOMAIN}`
+- **`DOMAIN`**: Your base domain name (e.g., `example.com`). MCP servers will be accessible at `{server}.mcp.{DOMAIN}`
 
 #### MCP Server Environment Variables
 
@@ -132,7 +162,9 @@ The following environment variables are used by the Docker Compose setup:
 
 ## Docker Compose with Traefik
 
-The service is configured to work with Traefik reverse proxy for automatic HTTPS and domain routing:
+### Wildcard Subdomain Configuration
+
+The service is configured to work with Traefik reverse proxy for automatic HTTPS and **wildcard subdomain** routing:
 
 ```yaml
 version: '3.8'
@@ -148,18 +180,245 @@ services:
     networks:
       - proxy
     labels:
+      # Wildcard subdomain routing for dynamic MCP servers
       - traefik.enable=true
-      - traefik.http.routers.remote-mcp-proxy.rule=Host(`mcp.${DOMAIN}`)
-      - traefik.http.routers.remote-mcp-proxy.entrypoints=websecure
-      - traefik.http.routers.remote-mcp-proxy.tls.certresolver=myresolver
+      - traefik.http.routers.mcp-wildcard.rule=Host(`*.mcp.${DOMAIN}`)
+      - traefik.http.routers.mcp-wildcard.entrypoints=websecure
+      - traefik.http.routers.mcp-wildcard.tls=true
+      - traefik.http.routers.mcp-wildcard.tls.certresolver=letsencrypt
+      - traefik.http.services.mcp-wildcard.loadbalancer.server.port=8080
+      
+      # Utility endpoints on main domain
+      - traefik.http.routers.mcp-main.rule=Host(`mcp.${DOMAIN}`)
+      - traefik.http.routers.mcp-main.entrypoints=websecure
+      - traefik.http.routers.mcp-main.tls=true
+      - traefik.http.routers.mcp-main.tls.certresolver=letsencrypt
+      - traefik.http.services.mcp-main.loadbalancer.server.port=8080
+
 networks:
   proxy:
     external: true
 ```
 
-Make sure to:
-1. Create a `.env` file with your `DOMAIN` variable
-2. Have Traefik running with the `proxy` network
+### Key Configuration Points:
+
+1. **Wildcard Rule**: `Host(\`*.mcp.${DOMAIN}\`)` captures all subdomains like `memory.mcp.domain.com`
+2. **Dynamic SSL**: Traefik automatically generates SSL certificates for new subdomains
+3. **Main Domain**: `mcp.${DOMAIN}` for utility endpoints (`/health`, `/listmcp`)
+4. **DNS Requirement**: Wildcard DNS record `*.mcp.domain.com` must be configured
+
+## Complete Setup Guide
+
+### Prerequisites
+
+- Docker and Docker Compose installed
+- Domain name with DNS control
+- Traefik reverse proxy running (or willingness to set it up)
+
+### Step-by-Step Setup
+
+#### 1. Clone and Configure
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd remote-mcp-proxy
+
+# Create environment configuration
+echo "DOMAIN=your-domain.com" > .env
+```
+
+#### 2. Configure Your MCP Servers
+
+Edit `config.json` with your desired MCP servers:
+
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    },
+    "sequential-thinking": {
+      "command": "npx", 
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-server-notion"],
+      "env": {
+        "NOTION_TOKEN": "your_notion_token_here"
+      }
+    }
+  }
+}
+```
+
+#### 3. Configure DNS (Critical Step)
+
+**For Cloudflare:**
+1. Go to DNS settings for your domain
+2. Add new record:
+   - **Type**: A
+   - **Name**: `*.mcp`
+   - **Content**: Your server's IP address
+   - **Proxy status**: Proxied (orange cloud)
+
+**For other DNS providers:**
+Create a wildcard A record: `*.mcp.your-domain.com → YOUR_SERVER_IP`
+
+#### 4. Set Up Traefik (If Not Already Running)
+
+Create `traefik/docker-compose.yml`:
+
+```yaml
+version: '3.8'
+services:
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - proxy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik.yml:/traefik.yml:ro
+      - ./acme.json:/acme.json
+    environment:
+      - CF_API_EMAIL=your-email@example.com  # If using Cloudflare
+      - CF_API_KEY=your-cloudflare-api-key   # If using Cloudflare
+
+networks:
+  proxy:
+    external: true
+```
+
+Create `traefik/traefik.yml`:
+
+```yaml
+global:
+  checkNewVersion: false
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: your-email@example.com
+      storage: acme.json
+      dnsChallenge:  # Recommended for wildcard certificates
+        provider: cloudflare
+        delayBeforeCheck: 0
+```
+
+#### 5. Deploy the MCP Proxy
+
+```bash
+# Create proxy network (if not exists)
+docker network create proxy
+
+# Start Traefik (if not running)
+cd traefik && docker-compose up -d && cd ..
+
+# Deploy MCP Proxy
+docker-compose up -d
+```
+
+#### 6. Verify Deployment
+
+```bash
+# Check if services are running
+docker-compose ps
+
+# Test main endpoints
+curl -s https://mcp.your-domain.com/health
+curl -s https://mcp.your-domain.com/listmcp
+
+# Test individual MCP server subdomains
+curl -s https://memory.mcp.your-domain.com/health
+curl -s https://sequential-thinking.mcp.your-domain.com/health
+```
+
+#### 7. Add to Claude.ai
+
+1. Open Claude.ai (requires Pro/Team/Enterprise plan)
+2. Go to Settings → Integrations
+3. Click "Add More" → "Custom Integration"
+4. Add your MCP server URLs:
+   - `https://memory.mcp.your-domain.com/sse`
+   - `https://sequential-thinking.mcp.your-domain.com/sse`
+   - `https://notion.mcp.your-domain.com/sse`
+
+### Troubleshooting
+
+#### DNS Issues
+```bash
+# Test DNS resolution
+nslookup memory.mcp.your-domain.com
+dig *.mcp.your-domain.com
+
+# Should resolve to your server IP
+```
+
+#### SSL Certificate Issues
+```bash
+# Check Traefik logs
+docker logs traefik
+
+# Check certificate generation
+docker exec traefik cat /acme.json
+```
+
+#### MCP Server Issues
+```bash
+# Check proxy logs
+docker logs remote-mcp-proxy
+
+# Test individual server tools
+curl -s https://mcp.your-domain.com/listtools/memory
+```
+
+#### Claude.ai Connection Issues
+1. Verify URL format: `https://server.mcp.domain.com/sse`
+2. Check authentication (if required)
+3. Ensure DNS and SSL are working
+4. Test with browser first
+
+### Environment Variables
+
+- **`DOMAIN`**: Your base domain (required)
+- **`MCP_DOMAIN`**: Override domain for MCP routing (optional)
+- **`PORT`**: HTTP server port (default: 8080)
+
+### Quick Commands
+
+```bash
+# View logs
+docker-compose logs -f
+
+# Restart service
+docker-compose restart
+
+# Add new MCP server
+# 1. Edit config.json
+# 2. Restart: docker-compose restart
+# 3. New URL automatically available: https://newserver.mcp.domain.com/sse
+
+# Update to latest version
+docker-compose pull && docker-compose up -d
+```
 3. Configure SSL certificate resolver in Traefik
 
 ## Development
