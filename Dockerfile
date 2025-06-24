@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.21-alpine3.18 AS builder
 
 WORKDIR /app
 
@@ -7,16 +7,18 @@ WORKDIR /app
 COPY go.mod go.sum ./
 
 # Download dependencies
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 # Copy source code
 COPY . .
 
 # Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o main .
 
 # Final stage
-FROM alpine:latest
+FROM alpine:3.18
 
 # Install dependencies for various MCP server types
 RUN apk --no-cache add \
@@ -26,38 +28,24 @@ RUN apk --no-cache add \
     curl wget \
     git \
     bash \
-    build-base \
     sqlite \
-    jq
+    jq \
+ && npm install -g npm@latest \
+ && curl -LsSf https://astral.sh/uv/install.sh | sh \
+ && ln -sf /root/.local/bin/uv /usr/local/bin/uv 2>/dev/null || true \
+ && pip3 install --no-cache-dir --break-system-packages \
+        requests \
+        httpx \
+        pydantic \
+ && npm install -g typescript \
+ && ln -sf /usr/bin/python3 /usr/bin/python \
+ && node --version && npm --version && python --version \
+ && npx --help >/dev/null 2>&1 || (echo '#!/bin/sh\nexec npm exec -- "$@"' > /usr/local/bin/npx && chmod +x /usr/local/bin/npx) \
+ && npx --version \
+ && echo "Build completed successfully" \
+ && mkdir -p /app /config
 
-# Update npm to latest version to ensure npx is available
-RUN npm install -g npm@latest
-
-# Install uv (fast Python package installer/manager)
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:/root/.cargo/bin:$PATH"
-
-# Create uv symlink for easier access
-RUN ln -sf /root/.local/bin/uv /usr/local/bin/uv 2>/dev/null || true
-
-# Install essential Python tools that MCP servers commonly need
-# Use --break-system-packages for Docker container environment
-RUN pip3 install --no-cache-dir --break-system-packages \
-    requests \
-    httpx \
-    pydantic
-
-# Install essential Node.js packages for MCP servers
-RUN npm install -g typescript
-
-# Create symlinks for common Python commands
-RUN ln -sf /usr/bin/python3 /usr/bin/python
-
-# Verify essential tools and create npx fallback if needed
-RUN node --version && npm --version && python --version
-RUN npx --help >/dev/null 2>&1 || (echo '#!/bin/sh\nexec npm exec -- "$@"' > /usr/local/bin/npx && chmod +x /usr/local/bin/npx)
-RUN npx --version
-RUN echo "Build completed successfully"
 
 WORKDIR /root/
 
@@ -67,11 +55,11 @@ COPY --from=builder /app/main .
 # Copy configuration file
 COPY config.json /app/config.json
 
-# Create directories for config (config.json will be mounted at runtime)
-RUN mkdir -p /app /config
-
 # Expose port
 EXPOSE 8080
+
+# Health check to mirror docker-compose
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 CMD curl -f http://localhost:8080/health || exit 1
 
 # Command to run
 CMD ["./main"]

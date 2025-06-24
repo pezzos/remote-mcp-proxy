@@ -1,10 +1,18 @@
 services:
   remote-mcp-proxy:
+    image: remote-mcp-proxy:latest
     build: .
     container_name: remote-mcp-proxy
     restart: unless-stopped
     volumes:
-      - ./config.json:/app/config.json
+      - ./config.json:/app/config.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     environment:
       - GO_ENV=production
     healthcheck:
