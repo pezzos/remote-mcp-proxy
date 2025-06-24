@@ -8,13 +8,15 @@ services:
       - ./config.json:/app/config.json:ro
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:exec
+      - /root/.npm:exec
     cap_drop:
       - ALL
     security_opt:
       - no-new-privileges:true
     environment:
       - GO_ENV=production
+      - DOMAIN=${DOMAIN}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -24,12 +26,28 @@ services:
       - proxy
     labels:
       - traefik.enable=true
-      # Wildcard subdomain routing for MCP servers
-      - traefik.http.routers.mcp-wildcard.rule=Host(`*.mcp.${DOMAIN}`)
-      - traefik.http.routers.mcp-wildcard.entrypoints=websecure
-      - traefik.http.routers.mcp-wildcard.tls=true
-      - traefik.http.routers.mcp-wildcard.tls.certresolver=myresolver
-      - traefik.http.services.mcp-wildcard.loadbalancer.server.port=8080
+      - traefik.docker.network=proxy
+      # filesystem MCP server routing
+      - traefik.http.routers.filesystem-mcp.rule=Host(`filesystem.mcp.${DOMAIN}`)
+      - traefik.http.routers.filesystem-mcp.entrypoints=websecure
+      - traefik.http.routers.filesystem-mcp.tls=true
+      - traefik.http.routers.filesystem-mcp.tls.certresolver=myresolver
+      - traefik.http.routers.filesystem-mcp.service=filesystem-mcp-service
+      - traefik.http.services.filesystem-mcp-service.loadbalancer.server.port=8080
+      # memory MCP server routing
+      - traefik.http.routers.memory-mcp.rule=Host(`memory.mcp.${DOMAIN}`)
+      - traefik.http.routers.memory-mcp.entrypoints=websecure
+      - traefik.http.routers.memory-mcp.tls=true
+      - traefik.http.routers.memory-mcp.tls.certresolver=myresolver
+      - traefik.http.routers.memory-mcp.service=memory-mcp-service
+      - traefik.http.services.memory-mcp-service.loadbalancer.server.port=8080
+      # sequential-thinking MCP server routing
+      - traefik.http.routers.sequential-thinking-mcp.rule=Host(`sequential-thinking.mcp.${DOMAIN}`)
+      - traefik.http.routers.sequential-thinking-mcp.entrypoints=websecure
+      - traefik.http.routers.sequential-thinking-mcp.tls=true
+      - traefik.http.routers.sequential-thinking-mcp.tls.certresolver=myresolver
+      - traefik.http.routers.sequential-thinking-mcp.service=sequential-thinking-mcp-service
+      - traefik.http.services.sequential-thinking-mcp-service.loadbalancer.server.port=8080
 
 networks:
   proxy:

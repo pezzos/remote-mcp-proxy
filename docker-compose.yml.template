@@ -1,0 +1,42 @@
+services:
+  remote-mcp-proxy:
+    image: remote-mcp-proxy:latest
+    build: .
+    container_name: remote-mcp-proxy
+    restart: unless-stopped
+    volumes:
+      - ./config.json:/app/config.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp:exec
+      - /root/.npm:exec
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - GO_ENV=production
+      - DOMAIN=${DOMAIN}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+{{- range $name, $serverConfig := (ds "config").mcpServers }}
+      # {{ $name }} MCP server routing
+      - traefik.http.routers.{{ $name }}-mcp.rule=Host(`{{ $name }}.mcp.${DOMAIN}`)
+      - traefik.http.routers.{{ $name }}-mcp.entrypoints=websecure
+      - traefik.http.routers.{{ $name }}-mcp.tls=true
+      - traefik.http.routers.{{ $name }}-mcp.tls.certresolver=myresolver
+      - traefik.http.routers.{{ $name }}-mcp.service={{ $name }}-mcp-service
+      - traefik.http.services.{{ $name }}-mcp-service.loadbalancer.server.port=8080
+{{- end }}
+
+networks:
+  proxy:
+    external: true

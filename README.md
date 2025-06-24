@@ -16,6 +16,32 @@ Run the proxy in Docker and it will:
 - Shuts down cleanly and cleans up any spawned processes
 - Exposes a `/health` endpoint so you can check status at a glance
 
+## 🚀 Dynamic Configuration System
+
+This proxy now features **automatic subdomain routing generation** from your `config.json` file. Simply define your MCP servers in JSON, and the system automatically creates Traefik routing rules for each server.
+
+### ⚡ Super Quick Start
+```bash
+# 1. Define servers
+echo '{"mcpServers":{"memory":{"command":"npx","args":["-y","@modelcontextprotocol/server-memory"]}}}' > config.json
+
+# 2. Set domain  
+echo "DOMAIN=yourdomain.com" > .env
+
+# 3. Deploy
+make install-deps && make up
+
+# 4. Use in Claude.ai
+# → https://memory.mcp.yourdomain.com/sse
+```
+
+### Key Features
+
+- ✅ **Dynamic Subdomain Routing**: Each server gets `{server}.mcp.{domain}/sse`
+- ✅ **Automatic Traefik Integration**: Routes generated automatically 
+- ✅ **Easy Scaling**: Add servers by editing JSON only
+- ✅ **Production Ready**: Proper SSL, load balancing, service discovery
+
 ## Quick Start
 
 ### 1. Create Configuration File
@@ -41,7 +67,25 @@ Create a `config.json` file describing your MCP servers (same format as `claude_
 }
 ```
 
-### 2. Run with Docker
+### 2. Deploy with Dynamic Configuration
+
+**Option A: Automated Make Workflow (Recommended)**
+
+```bash
+# Install dependencies (first time only)
+make install-deps
+
+# Set your domain
+echo "DOMAIN=yourdomain.com" > .env
+
+# Generate configuration and deploy
+make up
+
+# View logs
+make logs
+```
+
+**Option B: Manual Docker Deployment**
 
 ```bash
 # Build the image
@@ -94,39 +138,79 @@ Proxy status: Proxied (orange cloud)
 
 ### 6. Configure Claude.ai
 
-Open Claude.ai (requires Pro, Max, Teams, or Enterprise plan) and add your proxy URLs under Settings > Integrations:
+Open Claude.ai (requires Pro, Max, Teams, or Enterprise plan) and add your **automatically generated** proxy URLs under Settings > Integrations:
 
-**New Subdomain-based URLs** (Required format):
+**Auto-Generated URLs** (based on your config.json):
  - `https://notion-mcp.mcp.your-domain.com/sse`
  - `https://memory-mcp.mcp.your-domain.com/sse`
+ - `https://sequential-thinking.mcp.your-domain.com/sse`
 
 ✅ **Claude.ai Integration Status**: The Connect button now works reliably! The proxy fully supports Claude.ai Remote MCP integration with proper session management and tool discovery.
+
+### 🔄 Adding New MCP Servers
+
+**1. Edit config.json:**
+```json
+{
+  "mcpServers": {
+    "existing-server": {...},
+    "new-server": {
+      "command": "python",
+      "args": ["/path/to/server.py"]
+    }
+  }
+}
+```
+
+**2. Redeploy:**
+```bash
+make restart
+```
+
+**3. Use immediately:**
+- New URL: `https://new-server.mcp.your-domain.com/sse`
+- Automatically configured SSL, routing, load balancing
 
 **Debug Endpoints**: Use these endpoints to verify your MCP servers are working:
 - Check server status: `https://mcp.your-domain.com/listmcp`
 - Verify tools available: `https://mcp.your-domain.com/listtools/your-server-name`
 
-## URL Structure (Updated)
+## 🌐 Dynamic URL Structure
 
-**New Format**: Each MCP server is available at:
+**Auto-Generated Format**: Each MCP server is automatically available at:
 ```
 https://{server-name}.mcp.{DOMAIN}/sse
 ```
 
-**Examples**:
+**Examples** (from your config.json):
 - `https://memory.mcp.your-domain.com/sse`
 - `https://sequential-thinking.mcp.your-domain.com/sse`
 - `https://notion.mcp.your-domain.com/sse`
 
 Where `{DOMAIN}` is set in your `.env` file and `{server-name}` matches the key in your `config.json` file.
 
-### Why Subdomain Format?
+### 🔧 Make Commands Reference
 
-Claude.ai expects Remote MCP endpoints at root level (`/sse`), not path-based routing. This subdomain approach:
+| Command | Description |
+|---------|-------------|
+| `make help` | Show all available commands |
+| `make install-deps` | Install gomplate dependency |
+| `make generate` | Generate docker-compose.yml from config.json |
+| `make build` | Build Docker images |
+| `make up` | Generate config and start services |
+| `make down` | Stop and remove services |
+| `make restart` | Restart services with new config |
+| `make logs` | Show service logs |
+| `make clean` | Remove generated files |
+
+### Why Dynamic Subdomain Generation?
+
+Claude.ai expects Remote MCP endpoints at root level (`/sse`), not path-based routing. This automated subdomain approach:
 - ✅ Matches Remote MCP standard format
-- ✅ Works with dynamic server addition
+- ✅ Auto-scales with config.json changes
 - ✅ Provides clean separation between servers
-- ✅ Enables automatic URL generation
+- ✅ Eliminates manual Traefik configuration
+- ✅ Enables instant deployment of new servers
 
 ## Configuration
 
@@ -402,24 +486,63 @@ curl -s https://mcp.your-domain.com/listtools/memory
 - **`MCP_DOMAIN`**: Override domain for MCP routing (optional)
 - **`PORT`**: HTTP server port (default: 8080)
 
-### Quick Commands
+### Dynamic Configuration Commands
 
 ```bash
-# View logs
-docker-compose logs -f
+# View current servers
+jq '.mcpServers | keys' config.json
 
-# Restart service
-docker-compose restart
+# Generate and view routing configuration  
+make generate
+cat docker-compose.yml
 
-# Add new MCP server
-# 1. Edit config.json
-# 2. Restart: docker-compose restart
+# View logs for all services
+make logs
+
+# Quick restart after config changes
+make restart
+
+# Add new MCP server workflow:
+# 1. Edit config.json - add new server
+# 2. Run: make restart
 # 3. New URL automatically available: https://newserver.mcp.domain.com/sse
+# 4. All SSL, routing, service discovery handled automatically
 
 # Update to latest version
-docker-compose pull && docker-compose up -d
+docker-compose pull && make up
 ```
-3. Configure SSL certificate resolver in Traefik
+
+### 🏗️ Technical Architecture
+
+```
+config.json → gomplate → docker-compose.yml → Traefik → Claude.ai
+     ↓            ↓              ↓               ↓          ↓
+   Servers    Templates    Container Labels  SSL Routes  Integration
+```
+
+**Workflow**:
+1. **config.json**: Define MCP servers (single source of truth)
+2. **gomplate**: Template engine generates docker-compose.yml
+3. **Traefik Labels**: Each server gets automatic routing rules
+4. **SSL**: Automatic certificate generation for subdomains
+5. **Claude.ai**: Ready-to-use URLs with zero manual configuration
+
+### 📁 Dynamic Configuration Files
+
+```
+remote-mcp-proxy/
+├── config.json                    # ← MCP server definitions (edit this)
+├── .env                          # ← Domain configuration
+├── docker-compose.yml.template   # ← Template for generation
+├── docker-compose.yml           # ← Generated automatically (don't edit)
+├── Makefile                     # ← Build automation
+└── ...
+```
+
+**Key Files:**
+- **Edit**: `config.json`, `.env` 
+- **Auto-generated**: `docker-compose.yml`
+- **Use**: `make` commands for all operations
 
 ## Development
 
