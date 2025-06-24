@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:modelcontextprotocol.io)",
+      "Bash(go build:*)",
+      "Bash(go fmt:*)",
+      "Bash(go vet:*)",
+      "Bash(chmod:*)",
+      "Bash(go test:*)",
+      "Bash(./test/run-tests.sh:*)",
+      "Bash(grep:*)",
+      "Bash(cp:*)",
+      "Bash(docker start:*)",
+      "Bash(docker logs:*)",
+      "Bash(curl:*)",
+      "Bash(docker exec:*)",
+      "Bash(echo:*)",
+      "Bash(docker-compose:*)",
+      "Bash(docker-compose up:*)",
+      "Bash(go mod:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "WebFetch(domain:spec.modelcontextprotocol.io)",
+      "WebFetch(domain:docs.anthropic.com)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:support.anthropic.com)"
+    ],
+    "deny": []
+  }
+}
