@@ -20,7 +20,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 			Args:    []string{"test"},
 		},
 		"sequential-thinking": {
-			Command: "echo", 
+			Command: "echo",
 			Args:    []string{"test"},
 		},
 	}
@@ -243,11 +243,11 @@ func TestConfigValidateSubdomain(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			serverName, valid := cfg.ValidateSubdomain(tt.host)
-			
+
 			if valid != tt.expectedValid {
 				t.Errorf("Expected valid=%t, got valid=%t", tt.expectedValid, valid)
 			}
-			
+
 			if tt.expectedValid && serverName != tt.expectedServer {
 				t.Errorf("Expected server %s, got %s", tt.expectedServer, serverName)
 			}

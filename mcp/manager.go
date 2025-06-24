@@ -25,9 +25,9 @@ type Server struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
 	mu      sync.RWMutex
-	
+
 	// CRITICAL FIX: Dedicated mutex for stdout reading to prevent stdio deadlocks
-	// 
+	//
 	// This mutex serializes access to the MCP server's stdout stream, preventing
 	// race conditions when multiple concurrent HTTP requests try to read responses
 	// from the same MCP server simultaneously.
@@ -37,7 +37,7 @@ type Server struct {
 	// initialization and other requests.
 	//
 	// DO NOT REMOVE - this is essential for concurrent request handling
-	readMu  sync.Mutex
+	readMu sync.Mutex
 }
 
 // Manager manages multiple MCP server processes

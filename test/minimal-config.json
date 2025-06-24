@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "simple-echo": {
-      "command": "echo",
-      "args": ["hello world"],
-      "env": {}
-    }
-  }
-}

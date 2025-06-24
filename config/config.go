@@ -91,7 +91,7 @@ func (c *Config) GetPort() string {
 func (c *Config) ValidateSubdomain(host string) (string, bool) {
 	// Expected format: {server}.mcp.{domain}
 	expectedSuffix := fmt.Sprintf(".mcp.%s", c.Domain)
-	
+
 	// Remove port if present
 	for idx := 0; idx < len(host); idx++ {
 		if host[idx] == ':' {
@@ -99,23 +99,23 @@ func (c *Config) ValidateSubdomain(host string) (string, bool) {
 			break
 		}
 	}
-	
+
 	// Check if host ends with expected suffix
 	if len(host) <= len(expectedSuffix) {
 		return "", false
 	}
-	
+
 	if host[len(host)-len(expectedSuffix):] != expectedSuffix {
 		return "", false
 	}
-	
+
 	// Extract server name
 	serverName := host[:len(host)-len(expectedSuffix)]
-	
+
 	// Validate server name exists in configuration
 	if _, exists := c.MCPServers[serverName]; !exists {
 		return "", false
 	}
-	
+
 	return serverName, true
 }

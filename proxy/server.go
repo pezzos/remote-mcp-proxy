@@ -173,24 +173,24 @@ func (s *Server) startConnectionCleanup() {
 	}
 }
 
-// subdomainMiddleware extracts MCP server name from subdomain
+// subdomainMiddleware extracts MCP server name from subdomain or path
 func (s *Server) subdomainMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Extract server name from subdomain: memory.mcp.domain.com → "memory"
 		host := r.Host
-		
+
 		// Remove port if present
 		if colonIndex := strings.Index(host, ":"); colonIndex != -1 {
 			host = host[:colonIndex]
 		}
-		
+
 		parts := strings.Split(host, ".")
-		
+
 		// Expected format: {server}.mcp.{domain}
 		if len(parts) >= 3 && parts[1] == "mcp" {
 			serverName := parts[0]
 			log.Printf("DEBUG: Extracted server name '%s' from host '%s'", serverName, r.Host)
-			
+
 			// Validate server exists in configuration (if config is available)
 			if s.config != nil {
 				if _, exists := s.config.MCPServers[serverName]; !exists {
@@ -200,14 +200,39 @@ func (s *Server) subdomainMiddleware(next http.Handler) http.Handler {
 					return
 				}
 			}
-			
+
 			// Add server name to request context
 			ctx := context.WithValue(r.Context(), "mcpServer", serverName)
 			r = r.WithContext(ctx)
 		} else {
-			log.Printf("DEBUG: Host '%s' doesn't match subdomain pattern {server}.mcp.{domain}", r.Host)
+			// If subdomain doesn't match, try to extract from path for fallback
+			// Pattern: /{server}/sse or /{server}/sessions/{sessionId}
+			pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+			if len(pathParts) >= 1 && pathParts[0] != "" {
+				// Check if it's a valid server name and not a utility endpoint
+				serverName := pathParts[0]
+				if serverName != "health" && serverName != "listmcp" && serverName != "listtools" &&
+					serverName != "oauth" && serverName != ".well-known" {
+
+					// Validate server exists in configuration (if config is available)
+					if s.config != nil {
+						if _, exists := s.config.MCPServers[serverName]; exists {
+							log.Printf("DEBUG: Extracted server name '%s' from path '%s' (subdomain fallback)", serverName, r.URL.Path)
+							// Add server name to request context
+							ctx := context.WithValue(r.Context(), "mcpServer", serverName)
+							r = r.WithContext(ctx)
+						} else {
+							log.Printf("DEBUG: Path-based server '%s' not found in configuration", serverName)
+						}
+					}
+				}
+			}
+
+			if r.Context().Value("mcpServer") == nil {
+				log.Printf("DEBUG: Host '%s' doesn't match subdomain pattern {server}.mcp.{domain} and no valid server in path", r.Host)
+			}
 		}
-		
+
 		next.ServeHTTP(w, r)
 	})
 }
@@ -219,9 +244,13 @@ func (s *Server) Router() http.Handler {
 	// Apply subdomain detection middleware
 	r.Use(s.subdomainMiddleware)
 
-	// Root-level endpoints (standard Remote MCP format)
+	// Root-level endpoints (standard Remote MCP format - subdomain-based)
 	r.HandleFunc("/sse", s.handleMCPRequest).Methods("GET", "POST")
 	r.HandleFunc("/sessions/{sessionId:[^/]+}", s.handleSessionMessage).Methods("POST")
+
+	// Path-based endpoints (fallback for localhost and development)
+	r.HandleFunc("/{server:[^/]+}/sse", s.handleMCPRequest).Methods("GET", "POST")
+	r.HandleFunc("/{server:[^/]+}/sessions/{sessionId:[^/]+}", s.handleSessionMessage).Methods("POST")
 
 	// Utility endpoints
 	r.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
@@ -349,7 +378,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	//
 	// The raw MCP response contains tool names in their original format (e.g., "API-get-user")
 	// but Claude.ai expects normalized snake_case names (e.g., "api_get_user").
-	// 
+	//
 	// We must apply the same normalization that the regular MCP message flow uses
 	// to ensure consistency between /listtools endpoint and SSE connections.
 	//
@@ -399,12 +428,19 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 
 // handleMCPRequest handles Remote MCP requests and forwards them to local MCP servers
 func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
-	// Extract server name from context (set by subdomain middleware)
+	// Extract server name from context (set by subdomain middleware) or URL path
 	serverName, ok := r.Context().Value("mcpServer").(string)
 	if !ok || serverName == "" {
-		log.Printf("ERROR: No server name found in subdomain context for host: %s", r.Host)
-		http.Error(w, "Invalid subdomain format. Expected: {server}.mcp.{domain}", http.StatusBadRequest)
-		return
+		// Try to get server name from URL path (path-based routing fallback)
+		vars := mux.Vars(r)
+		if pathServer, exists := vars["server"]; exists && pathServer != "" {
+			serverName = pathServer
+			log.Printf("DEBUG: Using server name '%s' from URL path", serverName)
+		} else {
+			log.Printf("ERROR: No server name found in context or URL path for host: %s, path: %s", r.Host, r.URL.Path)
+			http.Error(w, "Invalid request format. Expected: {server}.mcp.{domain}/sse or /{server}/sse", http.StatusBadRequest)
+			return
+		}
 	}
 
 	// Validate server exists
@@ -537,7 +573,15 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 		host = r.Header.Get("X-Forwarded-Host")
 	}
 
-	sessionEndpoint := fmt.Sprintf("%s://%s/sessions/%s", scheme, host, sessionID)
+	// Determine if we're using subdomain-based or path-based routing
+	var sessionEndpoint string
+	if strings.Contains(host, ".mcp.") {
+		// Subdomain-based routing: https://memory.mcp.domain.com/sessions/abc123
+		sessionEndpoint = fmt.Sprintf("%s://%s/sessions/%s", scheme, host, sessionID)
+	} else {
+		// Path-based routing: http://localhost:8080/memory/sessions/abc123
+		sessionEndpoint = fmt.Sprintf("%s://%s/%s/sessions/%s", scheme, host, mcpServer.Name, sessionID)
+	}
 	log.Printf("INFO: Session endpoint URL: %s", sessionEndpoint)
 
 	endpointData := map[string]interface{}{
@@ -603,7 +647,7 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 			// The previous implementation constantly polled the MCP server for messages,
 			// but MCP servers only respond when they receive requests. This caused:
 			// - Thousands of timeout messages
-			// - Blocked SSE connections  
+			// - Blocked SSE connections
 			// - Failed tool discovery
 			//
 			// Remote MCP protocol should be REQUEST-DRIVEN, not polling-driven:
@@ -614,9 +658,9 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 			//
 			// For now, SSE just maintains the connection and waits.
 			// Future: Add channel-based event system for notifications if needed.
-			
+
 			log.Printf("DEBUG: SSE connection active for server %s, session %s - waiting for requests", mcpServer.Name, sessionID)
-			
+
 			// Just keep the connection alive - no more continuous polling
 			time.Sleep(1 * time.Second)
 		}
@@ -658,15 +702,15 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 
 	// CRITICAL FIX: Only handle handshake messages if this is NOT a session endpoint request
 	//
-	// Session endpoint requests (/{server}/sessions/{sessionId}) should be handled 
+	// Session endpoint requests (/{server}/sessions/{sessionId}) should be handled
 	// entirely by handleSessionMessage to prevent duplicate ReadMessage calls.
 	// The handleMCPMessage function should only handle direct SSE endpoint requests.
 	//
 	// Check if this request is coming to a session endpoint by looking at the URL path
 	isSessionEndpointRequest := strings.Contains(r.URL.Path, "/sessions/")
-	
+
 	log.Printf("INFO: Checking request type - URL: %s, IsSessionEndpoint: %v", r.URL.Path, isSessionEndpointRequest)
-	
+
 	if isSessionEndpointRequest {
 		log.Printf("ERROR: Session endpoint request incorrectly routed to handleMCPMessage")
 		log.Printf("ERROR: This should not happen - check routing configuration")
@@ -894,10 +938,10 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 			log.Printf("ERROR: Failed to store connection state: %v", err)
 		} else {
 			// CRITICAL FIX: Mark session as initialized immediately after successful initialize response
-			// 
+			//
 			// This is essential for Remote MCP protocol compliance. Claude.ai expects to be able to
 			// make follow-up requests (like tools/list) immediately after a successful initialize.
-			// The session MUST be marked as initialized here, not waiting for a separate 
+			// The session MUST be marked as initialized here, not waiting for a separate
 			// "initialized" notification which may never come in Remote MCP.
 			//
 			// Without this, all subsequent requests will fail with "Session not initialized" errors
@@ -942,12 +986,19 @@ func (s *Server) handleInitialized(w http.ResponseWriter, sessionID string, msg 
 
 // handleSessionMessage handles POST requests to session endpoints from Claude
 func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
-	// Extract server name from context (set by subdomain middleware)
+	// Extract server name from context (set by subdomain middleware) or URL path
 	serverName, ok := r.Context().Value("mcpServer").(string)
 	if !ok || serverName == "" {
-		log.Printf("ERROR: No server name found in subdomain context for host: %s", r.Host)
-		http.Error(w, "Invalid subdomain format. Expected: {server}.mcp.{domain}", http.StatusBadRequest)
-		return
+		// Try to get server name from URL path (path-based routing fallback)
+		vars := mux.Vars(r)
+		if pathServer, exists := vars["server"]; exists && pathServer != "" {
+			serverName = pathServer
+			log.Printf("DEBUG: Using server name '%s' from URL path for session", serverName)
+		} else {
+			log.Printf("ERROR: No server name found in context or URL path for host: %s, path: %s", r.Host, r.URL.Path)
+			http.Error(w, "Invalid request format. Expected: {server}.mcp.{domain}/sessions/{id} or /{server}/sessions/{id}", http.StatusBadRequest)
+			return
+		}
 	}
 
 	vars := mux.Vars(r)
@@ -1003,13 +1054,13 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	// initialize requests even when the session is not yet initialized.
 	// This breaks the deadlock where Claude.ai cannot initialize because
 	// session endpoints reject uninitialized requests.
-	
+
 	isHandshake := s.translator.IsHandshakeMessage(jsonrpcMsg.Method)
 	isInitialized := s.translator.IsInitialized(sessionID)
-	
-	log.Printf("DEBUG: Session %s - Method: %s, IsHandshake: %v, IsInitialized: %v", 
+
+	log.Printf("DEBUG: Session %s - Method: %s, IsHandshake: %v, IsInitialized: %v",
 		sessionID, jsonrpcMsg.Method, isHandshake, isInitialized)
-	
+
 	if !isHandshake && !isInitialized {
 		log.Printf("ERROR: Session %s not initialized for non-handshake method %s", sessionID, jsonrpcMsg.Method)
 		http.Error(w, "Session not initialized", http.StatusBadRequest)
@@ -1032,31 +1083,31 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	//
 	// New design: ALL session endpoint requests are synchronous:
 	// - initialize -> synchronous response
-	// - tools/list -> synchronous response  
+	// - tools/list -> synchronous response
 	// - tools/call -> synchronous response
 	//
 	// This is more aligned with how most Remote MCP implementations work.
-	
+
 	log.Printf("INFO: Handling session request %s synchronously", jsonrpcMsg.Method)
-	
+
 	// Send request to MCP server
 	if err := mcpServer.SendMessage(body); err != nil {
 		log.Printf("ERROR: Failed to send message to MCP server %s: %v", serverName, err)
 		http.Error(w, "Failed to send message to MCP server", http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Read response from MCP server synchronously
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	responseBytes, err := mcpServer.ReadMessage(ctx)
 	if err != nil {
 		log.Printf("ERROR: Failed to read response from MCP server %s: %v", serverName, err)
 		http.Error(w, "Failed to receive response from MCP server", http.StatusInternalServerError)
 		return
 	}
-	
+
 	// Handle special processing for handshake messages
 	if s.translator.IsHandshakeMessage(jsonrpcMsg.Method) {
 		// Parse response and update session state for handshake messages
@@ -1073,12 +1124,12 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// Return response directly to Claude.ai
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Mcp-Session-Id", sessionID)
 	w.WriteHeader(http.StatusOK)
-	
+
 	if _, err := w.Write(responseBytes); err != nil {
 		log.Printf("ERROR: Failed to write session response: %v", err)
 	} else {
