@@ -443,6 +443,31 @@ func (s *Server) validateAuthentication(r *http.Request) bool {
 - Verify if additional metadata fields are required
 - Look for undocumented required properties
 
+### SSE Flow Investigation and Hardening Ideas (2025-07-15)
+
+The SSE connection has historically been unreliable. Logs show the handler
+entering an infinite loop while waiting for initialization even though
+Claude.ai can only send `initialize` after receiving the session endpoint. This
+deadlock prevents tool discovery. Additional issues include endpoint events not
+being flushed immediately and stale sessions lingering after disconnects.
+
+**Proposed improvements:**
+
+1. **Simplify the SSE loop** – after sending the `endpoint` event keep the
+   connection open without polling. All requests should be sent via
+   `/sessions/{id}`.
+2. **Send periodic heartbeat comments** (every 15–30 seconds) so proxies do not
+   close idle streams.
+3. **Ensure headers and the first event are flushed** as soon as possible to
+   avoid early client timeouts.
+4. **Implement `Last-Event-ID` support** to let clients resume after network
+   interruptions.
+5. **Add structured logging and metrics** for connection lifecycle events.
+6. **Remove any residual polling logic** and rely on synchronous session message
+   handling.
+7. **Close SSE connections when sessions end** to prevent leaked goroutines and
+   stale translator state.
+
 ### Recommended Investigation Priority
 
 #### Phase 1: Tool Schema Validation (IMMEDIATE)
