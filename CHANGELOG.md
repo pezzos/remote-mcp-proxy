@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Subdomain-based URL Format**: Complete implementation of subdomain-based routing (`https://{server}.mcp.{domain}/sse`) for Remote MCP standard compliance
+  - **Subdomain Middleware**: Automatic server extraction from subdomains with validation
+  - **Environment Configuration**: Dynamic domain configuration via environment variables (MCP_DOMAIN, DOMAIN, PORT)
+  - **Traefik Wildcard Support**: Automatic wildcard subdomain routing configuration
+  - **Comprehensive Testing**: Unit tests for subdomain validation, routing, and environment configuration
 - **Comprehensive Changelog Management**: Automated changelog workflow integrated into CLAUDE.md development guidelines
 - **Traefik Session Persistence**: Sticky sessions, health checks, and SSE-optimized headers for better connection reliability
 - **Development Protocol**: Structured commit message conventions and documentation management process
@@ -32,6 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool Naming Convention Issue**: Fixed Claude.ai tool discovery by normalizing tool names from hyphenated format (API-get-user) to snake_case (api_get_user) with bidirectional transformation for tool calls
 
 ### Changed
+- **URL Format**: Migrated from path-based (`/memory/sse`) to subdomain-based (`https://memory.mcp.domain.com/sse`) routing for Remote MCP standard compliance
+- **Router Configuration**: Updated HTTP router to use root-level endpoints (`/sse`, `/sessions/{sessionId}`) with subdomain middleware for server detection
+- **Documentation**: Updated README.md with DNS wildcard configuration instructions and Traefik wildcard routing setup
 - **Docker Compose Configuration**: Enhanced with Traefik optimizations including CORS headers, connection persistence, and resource management
 - **CLAUDE.md Guidelines**: Added mandatory changelog management protocol and automated commit preparation workflow
 - **Request Tracking**: Enhanced protocol translator to track pending requests for intelligent error handling

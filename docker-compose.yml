@@ -24,10 +24,12 @@ services:
       - proxy
     labels:
       - traefik.enable=true
-      - traefik.http.routers.remote-mcp-proxy.rule=Host(`mcp.${DOMAIN}`)
-      - traefik.http.routers.remote-mcp-proxy.entrypoints=websecure
-      - traefik.http.routers.remote-mcp-proxy.tls.certresolver=myresolver
-      - traefik.http.services.remote-mcp-proxy.loadbalancer.server.port=8080
+      # Wildcard subdomain routing for MCP servers
+      - traefik.http.routers.mcp-wildcard.rule=Host(`*.mcp.${DOMAIN}`)
+      - traefik.http.routers.mcp-wildcard.entrypoints=websecure
+      - traefik.http.routers.mcp-wildcard.tls=true
+      - traefik.http.routers.mcp-wildcard.tls.certresolver=myresolver
+      - traefik.http.services.mcp-wildcard.loadbalancer.server.port=8080
 
 networks:
   proxy:
