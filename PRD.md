@@ -88,7 +88,253 @@ Uses the same format as `claude_desktop_config.json`:
 - [x] Add logging and error handling
 - [x] Create Docker image and deployment configuration
 
-### Phase 4: Advanced Features
+### Phase 4: Subdomain-based URL Format ⚠️ **CRITICAL FIX REQUIRED**
+
+**Root Cause Identified**: Current path-based URL format doesn't match Remote MCP standard.
+
+#### Problem Analysis
+- **Current (WRONG)**: `https://mcp.domain.com/memory/sse` 
+- **Standard (CORRECT)**: `https://example.com/sse`
+- **Impact**: Claude.ai expects root-level `/sse` endpoints, not path-based routing
+
+#### Solution: Dynamic Subdomain-based Architecture
+
+**New URL Format**: `https://{mcp-server}.mcp.{domain}/sse`
+
+Examples:
+- `https://memory.mcp.domain.com/sse`
+- `https://sequential-thinking.mcp.domain.com/sse`
+- `https://notion.mcp.domain.com/sse`
+
+#### Implementation Plan
+
+##### Step 1: Server Detection Middleware ✅ **PLANNED**
+**How-to**: Create subdomain extraction middleware in `proxy/server.go`
+```go
+// SubdomainMiddleware extracts MCP server name from subdomain
+func (s *Server) subdomainMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        // Extract: memory.mcp.domain.com → "memory"
+        host := r.Host
+        parts := strings.Split(host, ".")
+        
+        if len(parts) >= 3 && parts[1] == "mcp" {
+            serverName := parts[0]
+            // Add to request context
+            ctx := context.WithValue(r.Context(), "mcpServer", serverName)
+            r = r.WithContext(ctx)
+        }
+        
+        next.ServeHTTP(w, r)
+    })
+}
+```
+
+##### Step 2: Update Router Configuration ✅ **PLANNED**
+**How-to**: Modify `Router()` method in `proxy/server.go:166-194`
+```go
+func (s *Server) Router() http.Handler {
+    r := mux.NewRouter()
+    
+    // Apply subdomain detection middleware
+    r.Use(s.subdomainMiddleware)
+    
+    // Root-level endpoints (standard Remote MCP format)
+    r.HandleFunc("/sse", s.handleMCPRequest).Methods("GET", "POST")
+    r.HandleFunc("/sessions/{sessionId:[^/]+}", s.handleSessionMessage).Methods("POST")
+    
+    // Utility endpoints
+    r.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
+    r.HandleFunc("/listmcp", s.handleListMCP).Methods("GET", "OPTIONS")
+    
+    // OAuth endpoints
+    r.HandleFunc("/.well-known/oauth-authorization-server", s.handleOAuthMetadata).Methods("GET")
+    r.HandleFunc("/oauth/register", s.handleClientRegistration).Methods("POST", "OPTIONS")
+    r.HandleFunc("/oauth/authorize", s.handleAuthorize).Methods("GET", "POST")
+    r.HandleFunc("/oauth/token", s.handleToken).Methods("POST", "OPTIONS")
+    
+    r.Use(s.corsMiddleware)
+    return r
+}
+```
+
+##### Step 3: Dynamic Server Discovery ✅ **PLANNED**
+**How-to**: Update request handlers to use context-based server detection
+```go
+func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
+    // Extract server name from context (set by middleware)
+    serverName, ok := r.Context().Value("mcpServer").(string)
+    if !ok || serverName == "" {
+        http.Error(w, "Invalid subdomain format", http.StatusBadRequest)
+        return
+    }
+    
+    // Validate server exists
+    if !s.mcpManager.HasServer(serverName) {
+        http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
+        return
+    }
+    
+    // Continue with existing logic...
+}
+```
+
+##### Step 4: Traefik Wildcard Configuration ✅ **PLANNED**
+**How-to**: Configure Traefik for wildcard subdomain routing
+
+**Docker Compose Labels**:
+```yaml
+services:
+  remote-mcp-proxy:
+    image: remote-mcp-proxy:latest
+    labels:
+      # Wildcard subdomain routing
+      - "traefik.enable=true"
+      - "traefik.http.routers.mcp-wildcard.rule=Host(`*.mcp.${DOMAIN}`)"
+      - "traefik.http.routers.mcp-wildcard.tls=true"
+      - "traefik.http.routers.mcp-wildcard.tls.certresolver=letsencrypt"
+      - "traefik.http.services.mcp-wildcard.loadbalancer.server.port=8080"
+```
+
+**Manual Traefik Config** (if not using labels):
+```yaml
+# traefik.yml
+http:
+  routers:
+    mcp-wildcard:
+      rule: "Host(`*.mcp.domain.com`)"
+      service: remote-mcp-proxy
+      tls:
+        certResolver: letsencrypt
+  
+  services:
+    remote-mcp-proxy:
+      loadBalancer:
+        servers:
+          - url: "http://remote-mcp-proxy:8080"
+```
+
+##### Step 5: DNS Wildcard Configuration ✅ **PLANNED** 
+**How-to**: Set up DNS for dynamic subdomains
+
+**DNS Records** (A record with wildcard):
+```dns
+*.mcp.domain.com    A    YOUR_SERVER_IP
+```
+
+**Cloudflare DNS Example**:
+- Type: `A`
+- Name: `*.mcp`
+- Content: `YOUR_SERVER_IP`
+- Proxy status: `Proxied` (orange cloud)
+
+##### Step 6: Environment-Based Configuration ✅ **PLANNED**
+**How-to**: Make domain configuration dynamic
+
+**Environment Variables**:
+```bash
+# .env file
+MCP_DOMAIN=domain.com
+MCP_SUBDOMAIN_PREFIX=mcp
+```
+
+**Configuration Loading**:
+```go
+type Config struct {
+    Domain string `env:"MCP_DOMAIN" default:"localhost"`
+    Prefix string `env:"MCP_SUBDOMAIN_PREFIX" default:"mcp"`
+    Port   int    `env:"PORT" default:"8080"`
+}
+
+func (s *Server) validateSubdomain(host string) (string, bool) {
+    expectedSuffix := fmt.Sprintf(".%s.%s", s.config.Prefix, s.config.Domain)
+    if !strings.HasSuffix(host, expectedSuffix) {
+        return "", false
+    }
+    
+    serverName := strings.TrimSuffix(host, expectedSuffix)
+    return serverName, s.mcpManager.HasServer(serverName)
+}
+```
+
+##### Step 7: Backward Compatibility Support ✅ **PLANNED**
+**How-to**: Support both old and new URL formats during transition
+
+**Dual Route Support**:
+```go
+func (s *Server) Router() http.Handler {
+    r := mux.NewRouter()
+    
+    // Subdomain-based routes (primary)
+    subdomainRouter := r.Host("{subdomain:[^.]+}.mcp.{domain:.+}").Subrouter()
+    subdomainRouter.HandleFunc("/sse", s.handleSubdomainSSE).Methods("GET", "POST")
+    subdomainRouter.HandleFunc("/sessions/{sessionId}", s.handleSubdomainSession).Methods("POST")
+    
+    // Legacy path-based routes (fallback)
+    r.HandleFunc("/{server:[^/]+}/sse", s.handleLegacySSE).Methods("GET", "POST")
+    r.HandleFunc("/{server:[^/]+}/sessions/{sessionId}", s.handleLegacySession).Methods("POST")
+    
+    return r
+}
+```
+
+##### Step 8: User Setup Documentation ✅ **PLANNED**
+**How-to**: Simple setup process for end users
+
+**User Requirements**:
+1. **Domain Setup**: Configure wildcard DNS (`*.mcp.domain.com`)
+2. **Traefik Labels**: Add wildcard routing labels to docker-compose
+3. **Environment**: Set `MCP_DOMAIN=your-domain.com`
+4. **Claude.ai URLs**: Use format `https://SERVER.mcp.your-domain.com/sse`
+
+**One-Command Setup**:
+```bash
+# Set domain and deploy
+export DOMAIN=yourdomain.com
+docker-compose up -d
+
+# URLs automatically available:
+# https://memory.mcp.yourdomain.com/sse
+# https://sequential-thinking.mcp.yourdomain.com/sse
+```
+
+##### Step 9: Testing and Validation ✅ **PLANNED**
+**How-to**: Automated testing for subdomain routing
+
+**Test Cases**:
+```go
+func TestSubdomainRouting(t *testing.T) {
+    // Test valid subdomain
+    req := httptest.NewRequest("GET", "/sse", nil)
+    req.Host = "memory.mcp.example.com"
+    // Verify server extraction and routing
+    
+    // Test invalid subdomain
+    req.Host = "invalid.mcp.example.com"
+    // Verify 404 response
+    
+    // Test malformed subdomain
+    req.Host = "memory.example.com"
+    // Verify error handling
+}
+```
+
+#### Benefits of Subdomain Approach
+
+1. **Remote MCP Compliance**: URLs match `https://example.com/sse` standard
+2. **Dynamic Scaling**: New MCP servers automatically get URLs
+3. **Clean Separation**: Each server gets dedicated subdomain
+4. **Traefik Friendly**: Single wildcard rule handles all servers
+5. **User Friendly**: Predictable URL format for any MCP server
+
+#### Migration Path
+
+1. **Phase 1**: Implement subdomain support alongside current paths
+2. **Phase 2**: Update documentation to use subdomain URLs
+3. **Phase 3**: Deprecate path-based routing (with warnings)
+4. **Phase 4**: Remove legacy path support
+
+### Phase 5: Advanced Features
 
 #### Code Quality and Reliability Improvements (CRITICAL) ✅ **COMPLETED**
 - [x] **Fix Context/Timeout Handling (HIGH PRIORITY)**

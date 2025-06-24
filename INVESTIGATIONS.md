@@ -544,7 +544,68 @@ Based on Cloudflare MCP server analysis, Claude.ai expects these high-level capa
 - **Claude.ai expectations**: Remote MCP protocol, snake_case tools, capabilities negotiation
 - **Local MCP reality**: JSON-RPC protocol, various naming conventions, tool-focused servers
 
-**Root cause of current issues lies in the concurrent request handling and SSE event loop, NOT in command translation.**
+~~**Root cause of current issues lies in the concurrent request handling and SSE event loop, NOT in command translation.**~~
+
+## 🚨 **BREAKTHROUGH #6: URL FORMAT ISSUE DISCOVERED - JUNE 24, 07:00 UTC**
+
+### **CRITICAL DISCOVERY: Claude.ai Expects Standard Remote MCP URL Format**
+
+**The ACTUAL Root Problem**: Our URL format doesn't match Remote MCP standard!
+
+#### **Current Implementation (WRONG):**
+```
+https://mcp.domain.com/memory/sse              ← Path-based routing
+https://mcp.domain.com/memory/sessions/123     ← Multiple path segments  
+```
+
+#### **Standard Remote MCP Pattern (CORRECT):**
+```
+https://example.com/sse                        ← Root-level SSE endpoint
+https://example.com/messages                   ← Root-level messages
+```
+
+**Evidence from Working Examples:**
+- ✅ `remote-mcp-server-authless.workers.dev/sse`
+- ✅ `http://localhost:8080/sse` 
+- ✅ `http://example.com/sse`
+
+**ALL use ROOT-LEVEL `/sse` endpoints, NOT path-based routing!**
+
+#### **Why Claude.ai Fails:**
+1. **Claude.ai expects**: `https://mcp.domain.com/sse`
+2. **We provide**: `https://mcp.domain.com/memory/sse`  
+3. **Claude.ai gets confused** by path segments before `/sse`
+4. **Connection fails** because URL format doesn't match Remote MCP spec
+
+#### **SOLUTION OPTIONS:**
+
+**Option 1: Subdomain-based (RECOMMENDED)**
+```
+https://memory.mcp.domain.com/sse
+https://sequential-thinking.mcp.domain.com/sse
+```
+
+**Option 2: Root-level with query params**
+```
+https://mcp.domain.com/sse?server=memory
+https://mcp.domain.com/sessions/123?server=memory
+```
+
+**Option 3: Single server per domain (simplest)**
+```
+https://mcp.domain.com/sse  (only serves one MCP server)
+```
+
+#### **IMPACT ASSESSMENT:**
+- 🎯 **This explains EVERYTHING**: SSE hangs, session issues, tool discovery failures
+- 🔧 **Simple fix**: Change URL routing to match Remote MCP standard  
+- ✅ **Protocol implementation is correct**: Just wrong URL format
+- 🚀 **High confidence this will work**: Matches all working examples
+
+#### **NEXT STEPS:**
+1. **IMMEDIATE**: Implement subdomain-based routing
+2. **Test**: Connect Claude.ai to `https://memory.mcp.domain.com/sse`
+3. **Verify**: Tool discovery and execution work correctly
 
 ## Success Criteria
 
