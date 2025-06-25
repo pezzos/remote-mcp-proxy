@@ -15,6 +15,19 @@ import (
 	"remote-mcp-proxy/config"
 )
 
+// RequestResponse represents a paired request/response for serialization
+type RequestResponse struct {
+	Request    []byte
+	ResponseCh chan RequestResult
+	Ctx        context.Context
+}
+
+// RequestResult contains the response and any error
+type RequestResult struct {
+	Response []byte
+	Error    error
+}
+
 // Server represents a running MCP server process
 type Server struct {
 	Name    string
@@ -38,6 +51,16 @@ type Server struct {
 	//
 	// DO NOT REMOVE - this is essential for concurrent request handling
 	readMu sync.Mutex
+
+	// CONCURRENCY FIX: Request serialization to prevent response mismatching
+	//
+	// This channel-based queue ensures that requests to the same MCP server
+	// are processed one at a time, preventing multiple sessions from interfering
+	// with each other's responses when accessing the same MCP server.
+	//
+	// Each request gets a dedicated response channel to ensure proper correlation.
+	requestQueue chan RequestResponse
+	queueStarted bool
 }
 
 // Manager manages multiple MCP server processes
@@ -55,8 +78,10 @@ func NewManager(configs map[string]config.MCPServer) *Manager {
 	// Initialize servers from configs
 	for name, cfg := range configs {
 		m.servers[name] = &Server{
-			Name:   name,
-			Config: cfg,
+			Name:         name,
+			Config:       cfg,
+			requestQueue: make(chan RequestResponse, 100), // Buffer for concurrent requests
+			queueStarted: false,
 		}
 	}
 
@@ -188,18 +213,19 @@ func (m *Manager) startServer(name string, cfg config.MCPServer) error {
 		return fmt.Errorf("failed to start process: %w", err)
 	}
 
-	server := &Server{
-		Name:    name,
-		Config:  cfg,
-		Process: cmd,
-		Stdin:   stdin,
-		Stdout:  stdout,
-		ctx:     ctx,
-		cancel:  cancel,
-	}
+	// Update the existing server with process information (mutex is already held by caller)
+	server := m.servers[name]
+	server.Process = cmd
+	server.Stdin = stdin
+	server.Stdout = stdout
+	server.ctx = ctx
+	server.cancel = cancel
 
-	// Update the server in the map (mutex is already held by caller)
-	m.servers[name] = server
+	// Start the request processor if not already started
+	if !server.queueStarted {
+		go server.processRequests()
+		server.queueStarted = true
+	}
 
 	// Start monitoring the process
 	go server.monitor()
@@ -306,8 +332,52 @@ func (s *Server) Stop() {
 	log.Printf("INFO: Server %s stop completed", s.Name)
 }
 
-// SendMessage sends a JSON-RPC message to the MCP server
-func (s *Server) SendMessage(message []byte) error {
+// processRequests handles serialized request processing for the MCP server
+func (s *Server) processRequests() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: Panic in processRequests goroutine for server %s: %v", s.Name, r)
+		}
+		log.Printf("INFO: Request processor goroutine exiting for server %s", s.Name)
+	}()
+
+	log.Printf("INFO: Starting request processor for server %s", s.Name)
+
+	for {
+		select {
+		case req := <-s.requestQueue:
+			// Process the request synchronously
+			s.processRequest(req)
+		case <-s.ctx.Done():
+			log.Printf("INFO: Request processor context cancelled for server %s", s.Name)
+			return
+		}
+	}
+}
+
+// processRequest handles a single request/response cycle
+func (s *Server) processRequest(req RequestResponse) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("ERROR: Panic in processRequest for server %s: %v", s.Name, r)
+			req.ResponseCh <- RequestResult{nil, fmt.Errorf("panic in request processing: %v", r)}
+		}
+		close(req.ResponseCh)
+	}()
+
+	// Send the request
+	if err := s.sendMessageDirect(req.Request); err != nil {
+		req.ResponseCh <- RequestResult{nil, err}
+		return
+	}
+
+	// Read the response
+	response, err := s.readMessageDirect(req.Ctx)
+	req.ResponseCh <- RequestResult{response, err}
+}
+
+// sendMessageDirect sends a message directly (internal use by request processor)
+func (s *Server) sendMessageDirect(message []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -329,6 +399,129 @@ func (s *Server) SendMessage(message []byte) error {
 	log.Printf("INFO: Successfully sent message to server %s", s.Name)
 	log.Printf("=== MCP SEND MESSAGE END (Server: %s) - SUCCESS ===", s.Name)
 	return nil
+}
+
+// SendAndReceive sends a request and waits for the response using the serialized queue
+func (s *Server) SendAndReceive(ctx context.Context, message []byte) ([]byte, error) {
+	log.Printf("=== MCP SEND AND RECEIVE START (Server: %s) ===", s.Name)
+	log.Printf("DEBUG: Sending message to server %s: %s", s.Name, string(message))
+
+	// Create response channel
+	responseCh := make(chan RequestResult, 1)
+
+	// Create request
+	req := RequestResponse{
+		Request:    message,
+		ResponseCh: responseCh,
+		Ctx:        ctx,
+	}
+
+	// Send to queue
+	select {
+	case s.requestQueue <- req:
+		// Request queued successfully
+	case <-ctx.Done():
+		log.Printf("ERROR: Context cancelled before queuing request for server %s", s.Name)
+		return nil, ctx.Err()
+	}
+
+	// Wait for response
+	select {
+	case result := <-responseCh:
+		if result.Error != nil {
+			log.Printf("ERROR: Failed to process request for server %s: %v", s.Name, result.Error)
+			log.Printf("=== MCP SEND AND RECEIVE END (Server: %s) - FAILED ===", s.Name)
+			return nil, result.Error
+		}
+		log.Printf("INFO: Successfully received response from server %s", s.Name)
+		log.Printf("=== MCP SEND AND RECEIVE END (Server: %s) - SUCCESS ===", s.Name)
+		return result.Response, nil
+	case <-ctx.Done():
+		log.Printf("ERROR: Context cancelled while waiting for response from server %s", s.Name)
+		return nil, ctx.Err()
+	}
+}
+
+// SendMessage sends a JSON-RPC message to the MCP server using the request queue
+// This method is deprecated - use SendAndReceive for new code
+func (s *Server) SendMessage(message []byte) error {
+	// For backward compatibility, we still support this method
+	// but we recommend using SendAndReceive for proper request/response correlation
+	return s.sendMessageDirect(message)
+}
+
+// readMessageDirect reads a message directly (internal use by request processor)
+func (s *Server) readMessageDirect(ctx context.Context) ([]byte, error) {
+	// CRITICAL FIX: Use dedicated read mutex to prevent concurrent stdout reads
+	//
+	// This mutex ensures only one goroutine can read from the MCP server's stdout
+	// at a time, preventing stdio deadlocks and race conditions that caused
+	// "context deadline exceeded" errors during Remote MCP initialization.
+	//
+	// The mutex must be acquired BEFORE checking if stdout is available to
+	// maintain proper synchronization across all read operations.
+	//
+	// DO NOT REMOVE OR MODIFY - this fixes the core Claude.ai connection issue
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+
+	// Safely access stdout and server name under read lock
+	s.mu.RLock()
+	stdout := s.Stdout
+	serverName := s.Name
+	s.mu.RUnlock()
+
+	if stdout == nil {
+		log.Printf("ERROR: Server %s not running, cannot read message", serverName)
+		return nil, fmt.Errorf("server not running")
+	}
+
+	// Use a channel to communicate the result from the reading goroutine
+	type readResult struct {
+		data []byte
+		err  error
+	}
+
+	resultChan := make(chan readResult, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("ERROR: Panic in readMessageDirect goroutine for server %s: %v", s.Name, r)
+				resultChan <- readResult{nil, fmt.Errorf("panic in read operation: %v", r)}
+			}
+		}()
+
+		scanner := bufio.NewScanner(stdout)
+		if scanner.Scan() {
+			data := make([]byte, len(scanner.Bytes()))
+			copy(data, scanner.Bytes())
+			log.Printf("DEBUG: Read message from server %s: %s", serverName, string(data))
+			resultChan <- readResult{data, nil}
+		} else {
+			scanErr := scanner.Err()
+			if scanErr != nil {
+				log.Printf("ERROR: Scanner error for server %s: %v", serverName, scanErr)
+				resultChan <- readResult{nil, scanErr}
+			} else {
+				log.Printf("DEBUG: EOF reached for server %s", serverName)
+				resultChan <- readResult{nil, io.EOF}
+			}
+		}
+	}()
+
+	// Wait for either the read to complete or the context to be cancelled
+	select {
+	case result := <-resultChan:
+		if result.err != nil && result.err != io.EOF {
+			log.Printf("ERROR: Failed to read message from server %s: %v", serverName, result.err)
+		} else if result.err == nil {
+			log.Printf("INFO: Successfully read message from server %s", serverName)
+		}
+		return result.data, result.err
+	case <-ctx.Done():
+		log.Printf("WARNING: readMessageDirect timeout/cancellation for server %s: %v", serverName, ctx.Err())
+		return nil, ctx.Err()
+	}
 }
 
 // ReadMessage reads a JSON-RPC message from the MCP server with context timeout

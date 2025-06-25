@@ -24,12 +24,12 @@ docker-compose.yml: config.json docker-compose.yml.template check-deps
 generate: docker-compose.yml
 
 # Build the Docker image (generates compose file first)
-build: generate
+build: down generate
 	@echo "Building Docker images..."
 	docker-compose build
 
 # Start services (generates compose file and builds if needed)
-up: generate
+up: down generate
 	@echo "Starting services..."
 	docker-compose up --build -d
 

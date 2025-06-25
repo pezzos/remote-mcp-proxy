@@ -163,7 +163,7 @@ func (s *Server) startConnectionCleanup() {
 	ticker := time.NewTicker(30 * time.Second) // Cleanup every 30 seconds
 	defer ticker.Stop()
 
-	maxAge := 10 * time.Minute // Remove connections older than 10 minutes
+	maxAge := 2 * time.Minute // Remove connections older than 2 minutes for faster cleanup
 
 	for {
 		select {
@@ -256,6 +256,7 @@ func (s *Server) Router() http.Handler {
 	r.HandleFunc("/health", s.handleHealth).Methods("GET", "OPTIONS")
 	r.HandleFunc("/listmcp", s.handleListMCP).Methods("GET", "OPTIONS")
 	r.HandleFunc("/listtools/{server:[^/]+}", s.handleListTools).Methods("GET", "OPTIONS")
+	r.HandleFunc("/cleanup", s.handleCleanup).Methods("POST", "OPTIONS")
 
 	// OAuth 2.0 Dynamic Client Registration endpoints
 	r.HandleFunc("/.well-known/oauth-authorization-server", s.handleOAuthMetadata).Methods("GET")
@@ -298,6 +299,51 @@ func (s *Server) handleListMCP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	} else {
 		log.Printf("INFO: Successfully returned list of %d MCP servers", len(servers))
+	}
+}
+
+// handleCleanup manually cleans up stale connections and sessions
+func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
+	log.Printf("INFO: Handling manual cleanup request")
+
+	// Get current connections before cleanup
+	connectionsBefore := s.connectionManager.GetConnections()
+	countBefore := len(connectionsBefore)
+
+	// Force cleanup of all stale connections (older than 1 second for immediate cleanup)
+	s.connectionManager.CleanupStaleConnections(1 * time.Second)
+
+	// Get connections after cleanup
+	connectionsAfter := s.connectionManager.GetConnections()
+	countAfter := len(connectionsAfter)
+
+	cleanedCount := countBefore - countAfter
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	response := map[string]interface{}{
+		"message":            "Cleanup completed",
+		"connections_before": countBefore,
+		"connections_after":  countAfter,
+		"cleaned_count":      cleanedCount,
+		"remaining_sessions": make([]map[string]interface{}, 0),
+	}
+
+	// Add details about remaining connections
+	for sessionID, conn := range connectionsAfter {
+		response["remaining_sessions"] = append(response["remaining_sessions"].([]map[string]interface{}), map[string]interface{}{
+			"session_id":   sessionID,
+			"server_name":  conn.ServerName,
+			"connected_at": conn.ConnectedAt,
+		})
+	}
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("ERROR: Failed to encode cleanup response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	} else {
+		log.Printf("INFO: Manual cleanup completed - cleaned %d connections, %d remaining", cleanedCount, countAfter)
 	}
 }
 
@@ -344,31 +390,18 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send the tools/list request to the MCP server
-	if err := mcpServer.SendMessage(requestBytes); err != nil {
-		log.Printf("ERROR: Failed to send tools/list request to server %s: %v", serverName, err)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":   "send_failed",
-			"message": fmt.Sprintf("Failed to send request to MCP server: %v", err),
-			"server":  serverName,
-		})
-		return
-	}
-
-	// Read the response with a timeout - increased to match initialize timeout
+	// Send the tools/list request and receive response using serialized queue
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	responseBytes, err := mcpServer.ReadMessage(ctx)
+	responseBytes, err := mcpServer.SendAndReceive(ctx, requestBytes)
 	if err != nil {
-		log.Printf("ERROR: Failed to read tools/list response from server %s: %v", serverName, err)
+		log.Printf("ERROR: Failed to send/receive tools/list request to server %s: %v", serverName, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"error":   "read_failed",
-			"message": fmt.Sprintf("Failed to read response from MCP server: %v", err),
+			"error":   "request_failed",
+			"message": fmt.Sprintf("Failed to communicate with MCP server: %v", err),
 			"server":  serverName,
 		})
 		return
@@ -531,8 +564,16 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	log.Printf("SUCCESS: Session %s registered in translator", sessionID)
 
 	// Create cancellable context for this connection
-	ctx, cancel := context.WithCancel(r.Context())
+	// Use background context to avoid dependency on HTTP request context
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// Monitor HTTP request context for disconnection
+	go func() {
+		<-r.Context().Done()
+		log.Printf("INFO: HTTP request context cancelled for session %s, triggering cleanup", sessionID)
+		cancel()
+	}()
 
 	// Check connection limits and add to manager
 	log.Printf("INFO: Adding connection to manager...")
@@ -623,11 +664,24 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 
 	log.Printf("INFO: Starting SSE message loop for server %s, session %s", mcpServer.Name, sessionID)
 
+	// Add keep-alive ticker to detect client disconnection
+	keepAliveTicker := time.NewTicker(30 * time.Second)
+	defer keepAliveTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			log.Printf("INFO: SSE context cancelled for server %s, session %s", mcpServer.Name, sessionID)
 			return
+		case <-keepAliveTicker.C:
+			// Send keep-alive event to detect client disconnection
+			if _, err := fmt.Fprintf(w, "event: keep-alive\ndata: {\"timestamp\":%d}\n\n", time.Now().Unix()); err != nil {
+				log.Printf("INFO: Client disconnected for session %s (server %s): %v", sessionID, mcpServer.Name, err)
+				return
+			}
+			if flusher, ok := w.(http.Flusher); ok {
+				flusher.Flush()
+			}
 		case <-ticker.C:
 			// CRITICAL FIX: Remove initialization check to prevent SSE deadlock
 			//
@@ -761,18 +815,11 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 		log.Printf("DEBUG: Tracking request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
 	}
 
-	// Send request to MCP server
-	if err := mcpServer.SendMessage(body); err != nil {
-		log.Printf("ERROR: Failed to send message to MCP server %s: %v", mcpServer.Name, err)
-		http.Error(w, "Failed to send message to MCP server", http.StatusInternalServerError)
-		return
-	}
-
-	// Read response from MCP server synchronously with timeout and fallback handling
+	// Send request and receive response from MCP server using serialized queue
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	responseBytes, err := mcpServer.ReadMessage(ctx)
+	responseBytes, err := mcpServer.SendAndReceive(ctx, body)
 	if err != nil {
 		log.Printf("WARNING: Failed to read response from MCP server %s for method %s: %v",
 			mcpServer.Name, jsonrpcMsg.Method, err)
@@ -926,13 +973,6 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 
-	// Send initialize request to MCP server
-	if err := mcpServer.SendMessage(initRequestBytes); err != nil {
-		log.Printf("ERROR: Failed to send initialize request to MCP server %s: %v", mcpServer.Name, err)
-		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to communicate with MCP server", false)
-		return
-	}
-
 	// CRITICAL SECTION: Synchronous handshake for Remote MCP protocol compliance
 	//
 	// Remote MCP protocol (as implemented by Claude.ai) expects a synchronous JSON response
@@ -943,36 +983,19 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 	// server initialization (especially npm-based servers). Reducing this timeout will
 	// cause "context deadline exceeded" errors during initialization.
 	//
-	// The dedicated read goroutine pattern prevents stdio deadlocks that occur when
-	// multiple concurrent requests try to read from the same MCP server stdout stream.
+	// The serialized request queue prevents stdio deadlocks and response mismatching that
+	// occur when multiple concurrent requests try to access the same MCP server simultaneously.
 	log.Printf("INFO: Waiting for initialize response from MCP server %s...", mcpServer.Name)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// CRITICAL FIX: Use dedicated read goroutine to prevent stdio deadlock
-	// This pattern isolates the ReadMessage call to prevent race conditions
-	// when multiple requests access the same MCP server simultaneously
-	type readResult struct {
-		data []byte
-		err  error
-	}
-
-	readChan := make(chan readResult, 1)
-	go func() {
-		// ReadMessage uses a dedicated readMu mutex in mcp/manager.go to serialize stdout access
-		data, err := mcpServer.ReadMessage(ctx)
-		readChan <- readResult{data, err}
-	}()
-
-	// Wait for the ReadMessage goroutine to complete
-	// The context timeout in ReadMessage will handle timeouts properly
-	result := <-readChan
-	if result.err != nil {
-		log.Printf("ERROR: Failed to read initialize response from MCP server %s: %v", mcpServer.Name, result.err)
-		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to receive response from MCP server", false)
+	// Send initialize request and receive response using serialized queue
+	responseBytes, err := mcpServer.SendAndReceive(ctx, initRequestBytes)
+	if err != nil {
+		log.Printf("ERROR: Failed to send/receive initialize request to MCP server %s: %v", mcpServer.Name, err)
+		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to communicate with MCP server", false)
 		return
 	}
-	responseBytes := result.data
 
 	// Parse the MCP server's initialize response
 	var mcpResponse protocol.JSONRPCMessage
@@ -1141,21 +1164,14 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("INFO: Handling session request %s synchronously", jsonrpcMsg.Method)
 
-	// Send request to MCP server
-	if err := mcpServer.SendMessage(body); err != nil {
-		log.Printf("ERROR: Failed to send message to MCP server %s: %v", serverName, err)
-		http.Error(w, "Failed to send message to MCP server", http.StatusInternalServerError)
-		return
-	}
-
-	// Read response from MCP server synchronously
+	// Send request and receive response from MCP server using serialized queue
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	responseBytes, err := mcpServer.ReadMessage(ctx)
+	responseBytes, err := mcpServer.SendAndReceive(ctx, body)
 	if err != nil {
-		log.Printf("ERROR: Failed to read response from MCP server %s: %v", serverName, err)
-		http.Error(w, "Failed to receive response from MCP server", http.StatusInternalServerError)
+		log.Printf("ERROR: Failed to send/receive message to MCP server %s: %v", serverName, err)
+		http.Error(w, "Failed to communicate with MCP server", http.StatusInternalServerError)
 		return
 	}
 
