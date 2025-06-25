@@ -29,10 +29,25 @@ Complete documentation is organized in the `docs/` directory:
 4. **Update documentation** in `docs/` when making architectural changes
 5. **Follow error handling patterns** - log both success and failure with appropriate levels
 
+### Deployment Protocol
+6. **Docker Compose Location**: The docker-compose.yml file is located in the project root directory (`/remote-mcp-proxy/docker-compose.yml`)
+7. **Deployment Commands**: 
+   - Build and deploy: `docker-compose up -d --build`
+   - Check status: `docker-compose ps`
+   - View logs: `docker logs remote-mcp-proxy`
+8. **Container Health Verification**: Always wait for container to show `(healthy)` status before testing:
+   ```bash
+   # Wait for healthy status
+   docker-compose ps
+   # Verify health endpoint
+   docker exec remote-mcp-proxy curl -s http://localhost:8080/health
+   ```
+
 ### Testing and Integration Rules
-6. **Claude.ai Integration Testing**: If you need the user to test Claude.ai integration, just ask them directly
-7. **Use Real URLs for Testing**: Always use the real domain URLs (e.g., `https://memory.mcp.home.pezzos.com/sse`) instead of localhost when testing the complete flow through Traefik
-8. **Container Startup Timing**: Remember that the container takes time for its first healthcheck to pass - before the healthcheck succeeds, Traefik won't expose the service. Wait for healthy status before testing external URLs
+9. **Claude.ai Integration Testing**: If you need the user to test Claude.ai integration, just ask them directly
+10. **Use Real URLs for Testing**: Always use the real domain URLs (e.g., `https://memory.mcp.home.pezzos.com/sse`) instead of localhost when testing the complete flow through Traefik
+11. **Container Startup Timing**: Remember that the container takes time for its first healthcheck to pass - before the healthcheck succeeds, Traefik won't expose the service. Wait for healthy status before testing external URLs
+12. **Tool Discovery Issues**: If tools appear and then disappear in Claude.ai, this indicates request timeout issues. The proxy includes fallback response handling for unsupported MCP methods to prevent connection cancellation.
 
 ### Configuration
 Service expects `/app/config.json` with same format as `claude_desktop_config.json`:

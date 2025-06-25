@@ -26,11 +26,29 @@ curl -s https://mcp.home.pezzos.com/listmcp
 curl -s https://mcp.home.pezzos.com/listtools/memory
 curl -s https://mcp.home.pezzos.com/listtools/sequential-thinking
 
-# Remote MCP protocol tests (FAILING)
-curl -H "Authorization: Bearer test123" "https://mcp.home.pezzos.com/memory/sse" # HANGS
-curl -X POST "https://mcp.home.pezzos.com/memory/sse" -H "Authorization: Bearer test123" # TIMEOUT
-curl -X POST "https://mcp.home.pezzos.com/memory/sessions/test123" # "Session not initialized"
+# Remote MCP protocol tests (PREVIOUSLY FAILING, NOW FIXED)
+curl -H "Authorization: Bearer test123" "https://mcp.home.pezzos.com/memory/sse" # Now works
+curl -X POST "https://mcp.home.pezzos.com/memory/sse" -H "Authorization: Bearer test123" # Now works
+curl -X POST "https://mcp.home.pezzos.com/memory/sessions/test123" # Now works
 ```
+
+### ✅ RESOLVED: Request Timeout Issue
+
+**Issue**: Tools would appear initially in Claude.ai but then disappear due to request timeouts.
+
+**Root Cause**: After successful `tools/list` response, Claude.ai would send follow-up requests that some MCP servers don't respond to, causing 30-second timeouts and connection cancellation.
+
+**Solution Implemented** (`proxy/server.go:771-804`):
+- **Reduced timeout** from 30 to 10 seconds for faster failure detection
+- **Fallback response system** for optional Remote MCP methods:
+  - `resources/list` → Empty resources array
+  - `resources/read` → Method not found error  
+  - `prompts/list` → Empty prompts array
+  - `prompts/get` → Method not found error
+- **Proper error responses** for unsupported methods using JSON-RPC 2.0 format
+- **Connection stability** - prevents Claude.ai from canceling connections due to timeouts
+
+This ensures every request gets a response within 10 seconds, maintaining connection stability while preserving tool functionality.
 
 ## Root Cause Analysis
 

@@ -482,6 +482,24 @@ go test -v .                        # Integration tests
 go test -cover ./...                # With coverage
 ```
 
+#### Deployment Workflow
+**ALWAYS follow this sequence for deployment:**
+```bash
+# 1. Build and deploy container
+docker-compose up -d --build
+
+# 2. Wait for healthy status (required!)
+docker-compose ps
+# Wait until status shows "(healthy)" not just "(health: starting)"
+
+# 3. Verify service is responding
+docker exec remote-mcp-proxy curl -s http://localhost:8080/health
+
+# 4. Test external URL (if using Traefik)
+# Only after container is healthy - Traefik won't route until then
+curl -s https://memory.mcp.home.pezzos.com/health
+```
+
 #### Development Cycle
 1. **Read existing code** before making changes
 2. **Use TodoWrite** for planning complex tasks
@@ -605,3 +623,8 @@ if err := json.Unmarshal(data, &message); err != nil {
 - **Wait for healthcheck**: Remember the container needs time for its first healthcheck to pass - Traefik won't expose the service until the container is healthy
 - **Verify complete flow**: Test OAuth flow, SSE connection, tool discovery, and actual tool execution
 - **Check error responses** are properly formatted according to Remote MCP specification
+- **Tool Disappearing Issue**: If tools appear initially but then disappear, this indicates request timeout problems. The proxy handles this with:
+  - 10-second timeout for MCP server responses
+  - Fallback responses for optional methods (resources/list, prompts/list)
+  - Proper error responses for unsupported methods
+  - This prevents Claude.ai from canceling connections due to timeouts
