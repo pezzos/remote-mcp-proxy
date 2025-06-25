@@ -47,7 +47,13 @@ Complete documentation is organized in the `docs/` directory:
 9. **Claude.ai Integration Testing**: If you need the user to test Claude.ai integration, just ask them directly
 10. **Use Real URLs for Testing**: Always use the real domain URLs (e.g., `https://memory.mcp.home.pezzos.com/sse`) instead of localhost when testing the complete flow through Traefik
 11. **Container Startup Timing**: Remember that the container takes time for its first healthcheck to pass - before the healthcheck succeeds, Traefik won't expose the service. Wait for healthy status before testing external URLs
-12. **Tool Discovery Issues**: If tools appear and then disappear in Claude.ai, this indicates request timeout issues. The proxy includes fallback response handling for unsupported MCP methods to prevent connection cancellation.
+12. **Multiple Integration Support**: ✅ **FIXED** - The proxy now supports multiple simultaneous Claude.ai integrations without tool interference. Each integration maintains isolated tool discovery and execution.
+13. **Connection Cleanup**: The proxy automatically detects client disconnections within 30 seconds using keep-alive messages, with fallback cleanup after 2 minutes for stale connections.
+
+### Connection Management
+14. **Manual Cleanup**: Use `docker exec remote-mcp-proxy curl -X POST http://localhost:8080/cleanup` to force immediate cleanup of stale connections if needed
+15. **Connection Monitoring**: Check active connections with `docker logs remote-mcp-proxy` - no more continuous "SSE connection active" spam messages
+16. **Per-Server Request Queuing**: Requests to the same MCP server are serialized to prevent response mismatching, while different servers process requests concurrently
 
 ### Configuration
 Service expects `/app/config.json` with same format as `claude_desktop_config.json`:

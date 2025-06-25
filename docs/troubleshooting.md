@@ -1,7 +1,54 @@
-# Remote MCP Proxy - Tool Discovery Investigation
+# Remote MCP Proxy - Troubleshooting Guide
 
-## Problem Statement
-Claude.ai can connect to MCP servers through the Remote MCP proxy but **no tools are exposed** in the Claude.ai interface, despite successful connection status.
+## Multiple Integration Support ✅ **RESOLVED**
+
+### Problem Statement (RESOLVED)
+**Issue**: When multiple Claude.ai integrations were enabled simultaneously, tools from all but one integration would disappear, causing tool discovery conflicts.
+
+### Root Cause Analysis
+**Technical Issue**: Single MCP server process serving multiple concurrent sessions without proper request/response correlation, leading to stdout conflicts and response mismatching.
+
+**Specific Problem**:
+1. Multiple sessions accessing same MCP server simultaneously
+2. Concurrent `tools/list` requests causing response mixing
+3. Only "last successful" integration's tools remained visible
+4. Other integrations showed empty tool lists
+
+### Solution Implemented ✅
+**Request Serialization Architecture**:
+- **Per-server request queues**: Each MCP server processes requests one at a time
+- **Atomic request/response**: New `SendAndReceive()` method ensures proper correlation
+- **Connection isolation**: Sessions maintain separate tool discovery without interference
+- **Concurrent server support**: Different servers (memory vs sequential-thinking) still process concurrently
+
+### Connection Cleanup Improvements ✅
+**Enhanced Disconnect Detection**:
+- **Keep-alive messages**: 30-second SSE keep-alive events detect client disconnection
+- **Faster cleanup**: Reduced stale connection timeout from 10 minutes to 2 minutes  
+- **Better context handling**: Background contexts with HTTP request monitoring
+- **Manual cleanup**: Added `/cleanup` endpoint for administrative control
+
+### Testing Multiple Integrations
+```bash
+# Test simultaneous connections work correctly
+docker exec remote-mcp-proxy curl -X POST http://localhost:8080/cleanup  # Clear any stale connections
+# Connect memory and sequential-thinking integrations simultaneously in Claude.ai
+# Verify each shows only its intended server's tools
+
+# Monitor connection status
+docker logs remote-mcp-proxy --tail=20
+# Should show clean logs without "SSE connection active" spam
+```
+
+### Deployment Notes
+**Required for Multiple Integration Support**:
+1. **Deploy Latest Version**: Ensure container includes connection cleanup and request serialization fixes
+2. **Health Check**: Wait for `(healthy)` status before testing: `docker-compose ps`
+3. **Clean State**: Use cleanup endpoint if needed: `docker exec remote-mcp-proxy curl -X POST http://localhost:8080/cleanup`
+
+## Historical Issues (Previously Resolved)
+
+### ✅ RESOLVED: Tool Discovery Issue
 
 ## Test Results Summary
 
