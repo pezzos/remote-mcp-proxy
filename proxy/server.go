@@ -729,11 +729,31 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 	}
 	log.Printf("INFO: Not a handshake message, continuing with regular processing")
 
+	// PROTOCOL ADAPTATION FIX: Handle Claude.ai's behavior of sending all requests to /sse
+	//
+	// Claude.ai continues sending requests to /sse endpoint even after initialization,
+	// instead of switching to /sessions/{sessionId} as specified. To maintain compatibility
+	// while following protocol standards, we forward non-handshake requests to session
+	// logic when the session is initialized.
+	//
+	// This allows Claude.ai to work while maintaining support for compliant clients.
+
 	// Check if connection is initialized
 	if !s.translator.IsInitialized(sessionID) {
+		log.Printf("ERROR: Session %s not initialized for non-handshake method %s", sessionID, jsonrpcMsg.Method)
 		s.sendErrorResponse(w, jsonrpcMsg.ID, protocol.InvalidRequest, "Connection not initialized", false)
 		return
 	}
+
+	// CRITICAL FIX: Forward non-handshake requests to session logic for initialized sessions
+	//
+	// When Claude.ai sends non-handshake requests (tools/list, tools/call, etc.) to the
+	// /sse endpoint instead of /sessions/{sessionId}, we need to handle them synchronously
+	// like the session endpoint would, rather than the old asynchronous approach.
+	//
+	// This ensures Claude.ai gets immediate responses for tool discovery and calls.
+	log.Printf("INFO: Session %s is initialized, handling non-handshake request %s synchronously",
+		sessionID, jsonrpcMsg.Method)
 
 	// Track the request for potential fallback handling
 	if jsonrpcMsg.Method != "" && jsonrpcMsg.ID != nil {
@@ -741,27 +761,58 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 		log.Printf("DEBUG: Tracking request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
 	}
 
-	// Translate Remote MCP message to local MCP format
-	mcpMessage, err := s.translator.RemoteToMCP(body)
+	// Send request to MCP server
+	if err := mcpServer.SendMessage(body); err != nil {
+		log.Printf("ERROR: Failed to send message to MCP server %s: %v", mcpServer.Name, err)
+		http.Error(w, "Failed to send message to MCP server", http.StatusInternalServerError)
+		return
+	}
+
+	// Read response from MCP server synchronously with timeout and fallback handling
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	responseBytes, err := mcpServer.ReadMessage(ctx)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to translate message: %v", err), http.StatusBadRequest)
-		return
+		log.Printf("WARNING: Failed to read response from MCP server %s for method %s: %v",
+			mcpServer.Name, jsonrpcMsg.Method, err)
+
+		// Check if we should provide a fallback response for this method
+		if s.translator.ShouldProvideFallback(jsonrpcMsg.Method) {
+			log.Printf("INFO: Providing fallback response for method %s", jsonrpcMsg.Method)
+			fallbackResponse, fallbackErr := s.translator.CreateFallbackResponse(jsonrpcMsg.ID, jsonrpcMsg.Method)
+			if fallbackErr == nil {
+				responseBytes = fallbackResponse
+			} else {
+				log.Printf("ERROR: Failed to create fallback response: %v", fallbackErr)
+				http.Error(w, "Failed to receive response from MCP server", http.StatusInternalServerError)
+				return
+			}
+		} else {
+			// For non-fallback methods, create a proper error response
+			log.Printf("INFO: Creating error response for unsupported method %s", jsonrpcMsg.Method)
+			errorResponse, errorErr := s.translator.CreateErrorResponse(jsonrpcMsg.ID,
+				protocol.MethodNotFound, fmt.Sprintf("Method %s not supported", jsonrpcMsg.Method), false)
+			if errorErr == nil {
+				responseBytes = errorResponse
+			} else {
+				log.Printf("ERROR: Failed to create error response: %v", errorErr)
+				http.Error(w, "Failed to receive response from MCP server", http.StatusInternalServerError)
+				return
+			}
+		}
 	}
 
-	// Send message to MCP server
-	if err := mcpServer.SendMessage(mcpMessage); err != nil {
-		http.Error(w, fmt.Sprintf("Failed to send message to MCP server: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Return success response (HTTP 202 Accepted for MCP)
+	// Return response directly to Claude.ai (synchronous like session endpoint)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
+	w.Header().Set("Mcp-Session-Id", sessionID)
+	w.WriteHeader(http.StatusOK)
 
-	if _, err := w.Write([]byte(`{"status":"accepted"}`)); err != nil {
-		log.Printf("ERROR: Failed to write MCP message response: %v", err)
+	if _, err := w.Write(responseBytes); err != nil {
+		log.Printf("ERROR: Failed to write synchronous response: %v", err)
 	} else {
-		log.Printf("INFO: MCP message accepted and forwarded successfully")
+		log.Printf("INFO: Successfully returned synchronous response for %s to session %s via /sse endpoint",
+			jsonrpcMsg.Method, sessionID)
 	}
 }
 

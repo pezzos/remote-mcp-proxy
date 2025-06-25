@@ -248,12 +248,19 @@ const (
 	ProxyServerVersion = "1.0.0"
 )
 
-// RegisterSession creates an uninitialized session for SSE connections
+// RegisterSession creates an uninitialized session for SSE connections if it doesn't exist
 func (t *Translator) RegisterSession(sessionID string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	// Create uninitialized session state
+	// CRITICAL FIX: Only create session if it doesn't already exist
+	// This prevents overwriting initialized sessions when SSE connection starts
+	if _, exists := t.connections[sessionID]; exists {
+		// Session already exists, don't overwrite it
+		return
+	}
+
+	// Create uninitialized session state only for new sessions
 	state := &ConnectionState{
 		Initialized:     false,
 		ProtocolVersion: MCPProtocolVersion,
