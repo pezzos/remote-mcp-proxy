@@ -599,8 +599,9 @@ if err := json.Unmarshal(data, &message); err != nil {
 - **Handle multiple simultaneous** connections
 - **Proper CORS headers** for web client access
 
-#### Testing with Claude
-- **Use MCP inspector** tool for validation
-- **Test OAuth flow** if authentication enabled  
-- **Verify SSE streams** work correctly
-- **Check error responses** are properly formatted
+#### Testing with Claude.ai Integration
+- **Ask user for testing**: If you need to test Claude.ai integration, ask the user directly to test the connection
+- **Use real domain URLs**: Always test with the actual domain URLs (e.g., `https://memory.mcp.home.pezzos.com/sse`) instead of localhost for complete flow validation through Traefik
+- **Wait for healthcheck**: Remember the container needs time for its first healthcheck to pass - Traefik won't expose the service until the container is healthy
+- **Verify complete flow**: Test OAuth flow, SSE connection, tool discovery, and actual tool execution
+- **Check error responses** are properly formatted according to Remote MCP specification
