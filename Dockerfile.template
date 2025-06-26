@@ -43,10 +43,7 @@ RUN apk --no-cache add \
  && npx --help >/dev/null 2>&1 || (echo '#!/bin/sh\nexec npm exec -- "$@"' > /usr/local/bin/npx && chmod +x /usr/local/bin/npx) \
  && npx --version \
  && echo "Pre-installing MCP packages..." \
- && npm install -g @modelcontextprotocol/server-filesystem \
- && npm install -g @modelcontextprotocol/server-memory \
- && npm install -g @modelcontextprotocol/server-sequential-thinking \
- && npm install -g @notionhq/notion-mcp-server \
+{{range .MCPPackages}} && npm install -g {{.}}{{end}} \
  && echo "Build completed successfully" \
  && mkdir -p /app /config
 

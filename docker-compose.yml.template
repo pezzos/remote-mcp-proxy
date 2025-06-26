@@ -46,10 +46,10 @@ services:
     volumes:
       - ./config.json:/app/config.json:ro
       - ./logs:/app/logs
+      - npm-cache:/root/.npm
     read_only: true
     tmpfs:
       - /tmp:exec
-      - /root/.npm:exec
     cap_drop:
       - ALL
     security_opt:
@@ -101,8 +101,10 @@ networks:
     external: true
 {{- end }}
 
-{{- if eq (getenv "ENABLE_LOCAL_TRAEFIK") "true" }}
 volumes:
+  npm-cache:
+    driver: local
+{{- if eq (getenv "ENABLE_LOCAL_TRAEFIK") "true" }}
   traefik-letsencrypt:
     driver: local
 {{- end }}
