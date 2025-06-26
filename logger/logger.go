@@ -302,11 +302,29 @@ func (l *Logger) summarizeHealthCheck(message string) string {
 
 // cleanMessage removes redundant prefixes and cleans up formatting
 func (l *Logger) cleanMessage(message string) string {
-	// Remove double INFO prefixes: "INFO: INFO" -> "INFO"
-	message = strings.ReplaceAll(message, "INFO: INFO", "INFO")
-	message = strings.ReplaceAll(message, "ERROR: ERROR", "ERROR")
-	message = strings.ReplaceAll(message, "WARN: WARN", "WARN")
-	message = strings.ReplaceAll(message, "DEBUG: DEBUG", "DEBUG")
+	// Remove redundant log level prefixes that appear after proper level detection
+	message = strings.ReplaceAll(message, "INFO: INFO", "")
+	message = strings.ReplaceAll(message, "ERROR: INFO", "")
+	message = strings.ReplaceAll(message, "WARN: INFO", "")
+	message = strings.ReplaceAll(message, "DEBUG: INFO", "")
+	message = strings.ReplaceAll(message, "INFO: ERROR", "")
+	message = strings.ReplaceAll(message, "ERROR: ERROR", "")
+	message = strings.ReplaceAll(message, "WARN: WARN", "")
+	message = strings.ReplaceAll(message, "DEBUG: DEBUG", "")
+
+	// Remove redundant "INFO: " prefixes at start of message
+	if strings.HasPrefix(message, "INFO: ") {
+		message = strings.TrimPrefix(message, "INFO: ")
+	}
+	if strings.HasPrefix(message, "ERROR: ") {
+		message = strings.TrimPrefix(message, "ERROR: ")
+	}
+	if strings.HasPrefix(message, "WARN: ") {
+		message = strings.TrimPrefix(message, "WARN: ")
+	}
+	if strings.HasPrefix(message, "DEBUG: ") {
+		message = strings.TrimPrefix(message, "DEBUG: ")
+	}
 
 	// Simplify repetitive boundary markers
 	message = strings.ReplaceAll(message, "=== MCP SEND AND RECEIVE START (Server: ", ">>> ")
@@ -323,6 +341,9 @@ func (l *Logger) cleanMessage(message string) string {
 			}
 		}
 	}
+
+	// Trim leading/trailing whitespace after cleanup
+	message = strings.TrimSpace(message)
 
 	return message
 }

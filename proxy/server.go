@@ -303,7 +303,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleListMCP returns the list of all configured MCP servers and their status
 func (s *Server) handleListMCP(w http.ResponseWriter, r *http.Request) {
-	logger.System().Info("INFO: Handling listmcp request")
+	logger.System().Info("Handling listmcp request")
 
 	servers := s.mcpManager.GetAllServers()
 
@@ -317,13 +317,13 @@ func (s *Server) handleListMCP(w http.ResponseWriter, r *http.Request) {
 		logger.System().Error(" Failed to encode listmcp response: %v", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	} else {
-		logger.System().Info("INFO: Successfully returned list of %d MCP servers", len(servers))
+		logger.System().Info("Successfully returned list of %d MCP servers", len(servers))
 	}
 }
 
 // handleCleanup manually cleans up stale connections and sessions
 func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
-	logger.System().Info("INFO: Handling manual cleanup request")
+	logger.System().Info("Handling manual cleanup request")
 
 	// Get current connections before cleanup
 	connectionsBefore := s.connectionManager.GetConnections()
@@ -362,7 +362,7 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 		logger.System().Error(" Failed to encode cleanup response: %v", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	} else {
-		logger.System().Info("INFO: Manual cleanup completed - cleaned %d connections, %d remaining", cleanedCount, countAfter)
+		logger.System().Info("Manual cleanup completed - cleaned %d connections, %d remaining", cleanedCount, countAfter)
 	}
 }
 
@@ -371,7 +371,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	serverName := vars["server"]
 
-	logger.System().Info("INFO: Handling listtools request for server: %s", serverName)
+	logger.System().Info("Handling listtools request for server: %s", serverName)
 
 	// Get the MCP server
 	mcpServer, exists := s.mcpManager.GetServer(serverName)
@@ -474,7 +474,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		logger.System().Error(" Failed to encode listtools response: %v", err)
 	} else {
-		logger.System().Info("INFO: Successfully returned normalized tools list for server %s", serverName)
+		logger.System().Info("Successfully returned normalized tools list for server %s", serverName)
 	}
 }
 
@@ -503,12 +503,12 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Consolidated request logging (reduce token usage)
-	logger.System().Info(">>> MCP %s %s via %s from %s", r.Method, r.URL.String(), serverName, r.RemoteAddr)
+	// Consolidated request logging
+	logger.System().Debug(">>> MCP %s %s via %s", r.Method, r.URL.String(), serverName)
 
-	// Only log auth and session at DEBUG level to reduce verbosity
+	// Auth and session logging moved to TRACE level
 	if auth := r.Header.Get("Authorization"); auth != "" {
-		logger.System().Debug("Auth: %s", func() string {
+		logger.System().Trace("Auth: %s", func() string {
 			if len(auth) > 15 {
 				return auth[:15] + "..."
 			}
@@ -517,11 +517,11 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if sessionID := r.Header.Get("Mcp-Session-Id"); sessionID != "" {
-		logger.System().Debug("Session: %s", sessionID)
+		logger.System().Trace("Session: %s", sessionID)
 	}
 
 	// Validate authentication
-	logger.System().Info("INFO: Validating authentication...")
+	logger.System().Info("Validating authentication...")
 	if !s.validateAuthentication(r) {
 		logger.System().Error(" Authentication failed for request from %s", r.RemoteAddr)
 		logger.System().Info("=== MCP REQUEST END (AUTH FAILED) ===")
@@ -536,14 +536,14 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	logger.System().Info("SUCCESS: Found MCP server: %s (running: %v)", serverName, mcpServer.IsRunning())
 
 	// Handle based on request method
-	logger.System().Info("INFO: Handling request method: %s", r.Method)
+	logger.System().Info("Handling request method: %s", r.Method)
 	switch r.Method {
 	case "GET":
-		logger.System().Info("INFO: Starting SSE connection handling...")
+		logger.System().Info("Starting SSE connection handling...")
 		s.handleSSEConnection(w, r, mcpServer)
 		logger.System().Info("=== MCP REQUEST END (SSE) ===")
 	case "POST":
-		logger.System().Info("INFO: Starting POST message handling...")
+		logger.System().Info("Starting POST message handling...")
 		s.handleMCPMessage(w, r, mcpServer)
 		logger.System().Info("=== MCP REQUEST END (POST) ===")
 	default:
@@ -556,11 +556,11 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 // handleSSEConnection establishes a Server-Sent Events connection
 func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcpServer *mcp.Server) {
 	logger.System().Info("=== SSE CONNECTION START ===")
-	logger.System().Info("INFO: Setting up SSE connection for server: %s", mcpServer.Name)
+	logger.System().Info("Setting up SSE connection for server: %s", mcpServer.Name)
 
 	// Get or generate session ID
 	sessionID := s.getSessionID(r)
-	logger.System().Info("INFO: Session ID for SSE connection: %s", sessionID)
+	logger.System().Info("Session ID for SSE connection: %s", sessionID)
 
 	// CRITICAL FIX: Register session in translator immediately
 	//
@@ -581,12 +581,12 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	// Monitor HTTP request context for disconnection
 	go func() {
 		<-r.Context().Done()
-		logger.System().Info("INFO: HTTP request context cancelled for session %s, triggering cleanup", sessionID)
+		logger.System().Info("HTTP request context cancelled for session %s, triggering cleanup", sessionID)
 		cancel()
 	}()
 
 	// Check connection limits and add to manager
-	logger.System().Info("INFO: Adding connection to manager...")
+	logger.System().Info("Adding connection to manager...")
 	if err := s.connectionManager.AddConnection(sessionID, mcpServer.Name, ctx, cancel); err != nil {
 		logger.System().Error(" Failed to add connection for session %s: %v", sessionID, err)
 		logger.System().Info("=== SSE CONNECTION END (CONNECTION LIMIT) ===")
@@ -596,7 +596,7 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	logger.System().Info("SUCCESS: Connection added to manager")
 
 	// Set SSE headers
-	logger.System().Info("INFO: Setting SSE headers...")
+	logger.System().Info("Setting SSE headers...")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -605,7 +605,7 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	logger.System().Info("SUCCESS: SSE headers set")
 
 	// Send required "endpoint" event for Remote MCP protocol
-	logger.System().Info("INFO: Sending endpoint event...")
+	logger.System().Info("Sending endpoint event...")
 	if _, err := fmt.Fprintf(w, "event: endpoint\n"); err != nil {
 		logger.System().Error(" Failed to write SSE endpoint event: %v", err)
 		logger.System().Info("=== SSE CONNECTION END (ENDPOINT EVENT FAILED) ===")
@@ -970,7 +970,7 @@ func (s *Server) getSessionID(r *http.Request) string {
 	}
 
 	sessionID := hex.EncodeToString(bytes)
-	logger.System().Info("INFO: Generated new session ID: %s", sessionID)
+	logger.System().Debug("Generated session ID: %s", sessionID)
 	return sessionID
 }
 
@@ -1141,12 +1141,12 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	sessionID := vars["sessionId"]
 
-	logger.System().Info("=== SESSION MESSAGE START ===")
-	logger.System().Info("INFO: Handling session message for server: %s (from subdomain), session: %s", serverName, sessionID)
-	logger.System().Info("INFO: Method: %s, URL: %s", r.Method, r.URL.String())
-	logger.System().Info("INFO: Remote Address: %s", r.RemoteAddr)
-	logger.System().Info("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
-	logger.System().Info("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
+	logger.System().Debug("=== SESSION MESSAGE START ===")
+	logger.System().Info("Handling session message for server: %s, session: %s", serverName, sessionID)
+	logger.System().Debug("Method: %s, URL: %s", r.Method, r.URL.String())
+	logger.System().Debug("Remote Address: %s", r.RemoteAddr)
+	logger.System().Debug("User-Agent: %s", r.Header.Get("User-Agent"))
+	logger.System().Debug("Content-Type: %s", r.Header.Get("Content-Type"))
 
 	// Validate authentication
 	if !s.validateAuthentication(r) {
@@ -1162,7 +1162,7 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read the request body first to check message type
-	logger.System().Info("INFO: Reading session message body...")
+	logger.System().Debug("Reading session message body...")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		logger.System().Error(" Failed to read session message body: %v", err)
@@ -1171,10 +1171,10 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.System().Info("SUCCESS: Session message body read (%d bytes)", len(body))
-	logger.System().Info("INFO: Session message body: %s", string(body))
+	logger.System().Debug("Session message body: %s", string(body))
 
 	// Parse the JSON-RPC message
-	logger.System().Info("INFO: Parsing session message JSON-RPC...")
+	logger.System().Debug("Parsing session message JSON-RPC...")
 	var jsonrpcMsg protocol.JSONRPCMessage
 	if err := json.Unmarshal(body, &jsonrpcMsg); err != nil {
 		logger.System().Error(" Invalid session message JSON-RPC: %v", err)
@@ -1183,7 +1183,7 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.System().Info("SUCCESS: Session message JSON-RPC parsed")
-	logger.System().Info("INFO: Session message method: %s, ID: %v, SessionID: %s", jsonrpcMsg.Method, jsonrpcMsg.ID, sessionID)
+	logger.System().Debug("Session message method: %s, ID: %v, SessionID: %s", jsonrpcMsg.Method, jsonrpcMsg.ID, sessionID)
 
 	// CRITICAL FIX: Allow handshake messages on uninitialized sessions
 	//
@@ -1311,7 +1311,7 @@ func (s *Server) validateAuthentication(r *http.Request) bool {
 
 	// Simple token validation - accept any non-empty token for Claude.ai compatibility
 	// For Claude.ai Remote MCP, any Bearer token should work
-	logger.System().Info("INFO: Authentication successful with token: %s...", func() string {
+	logger.System().Debug("Authentication successful with token: %s...", func() string {
 		if len(token) > 10 {
 			return token[:10]
 		}
@@ -1403,7 +1403,7 @@ func (s *Server) handleClientRegistration(w http.ResponseWriter, r *http.Request
 		"scope": "mcp",
 	}
 
-	logger.System().Info("INFO: OAuth client registered - ID: %s", clientID)
+	logger.System().Info("OAuth client registered - ID: %s", clientID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -1425,7 +1425,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	// Generate authorization code
 	authCode := generateRandomString(32)
 
-	logger.System().Info("INFO: OAuth authorization request - Client: %s, Redirect: %s", clientID, redirectURI)
+	logger.System().Info("OAuth authorization request - Client: %s, Redirect: %s", clientID, redirectURI)
 
 	// Redirect with authorization code
 	callbackURL := fmt.Sprintf("%s?code=%s", redirectURI, authCode)
@@ -1467,7 +1467,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		"scope":        "mcp",
 	}
 
-	logger.System().Info("INFO: OAuth token issued - Client: %s, Token: %s...", clientID, accessToken[:10])
+	logger.System().Info("OAuth token issued - Client: %s, Token: %s...", clientID, accessToken[:10])
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tokenResponse)

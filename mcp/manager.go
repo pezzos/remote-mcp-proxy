@@ -391,7 +391,7 @@ func (s *Server) sendMessageDirect(message []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	s.logger.Debug(">>> %s", s.Name)
+	// Removed redundant server name logging - server context already available in MCP logs
 
 	if s.Stdin == nil {
 		s.logger.Error("Cannot send message to server %s: server not running", s.Name)
@@ -411,7 +411,7 @@ func (s *Server) sendMessageDirect(message []byte) error {
 
 // SendAndReceive sends a request and waits for the response using the serialized queue
 func (s *Server) SendAndReceive(ctx context.Context, message []byte) ([]byte, error) {
-	s.logger.Debug(">>> %s", s.Name)
+	// Removed redundant server name logging - server context already available in MCP logs
 
 	// Create response channel
 	responseCh := make(chan RequestResult, 1)
@@ -437,10 +437,10 @@ func (s *Server) SendAndReceive(ctx context.Context, message []byte) ([]byte, er
 	case result := <-responseCh:
 		if result.Error != nil {
 			s.logger.Error("Failed to process request for server %s: %v", s.Name, result.Error)
-			s.logger.Debug("<<< %s FAILED", s.Name)
+			// Removed redundant server name logging - error details already logged
 			return nil, result.Error
 		}
-		s.logger.Debug("<<< %s OK", s.Name)
+		// Removed redundant server name logging - server context already available in MCP logs
 		return result.Response, nil
 	case <-ctx.Done():
 		s.logger.Error("Context cancelled while waiting for response from server %s", s.Name)
