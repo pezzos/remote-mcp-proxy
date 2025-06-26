@@ -317,3 +317,62 @@ Based on the investigation findings, implemented comprehensive solutions to addr
 **Status**: ✅ **Ready for Production** - All fixes implemented and tested
 
 ---
+
+## Investigation: Memory MCP Read-Only File System Error
+**Date**: 2025-06-26
+**Status**: ✅ **Resolved**
+
+### Problem Statement
+Memory MCP server was failing with "EROFS: read-only file system" error when trying to write to `/usr/local/...`, preventing proper MCP functionality while other protocol operations appeared to work.
+
+### Evidence Gathered
+- **11:40:28**: EROFS error in logs: `{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"EROFS: read-only file system, open '/usr/l...}"`
+- **Container Analysis**: Found container filesystem mounted read-only (`ro`) via `docker exec remote-mcp-proxy mount | grep ro`
+- **Memory MCP Package**: Located at `/usr/local/lib/node_modules/@modelcontextprotocol/server-memory/` 
+- **Storage Requirement**: Memory MCP needs to write `memory.json` file for knowledge graph persistence
+- **Default Behavior**: Memory MCP defaults to writing in its installation directory when `MEMORY_FILE_PATH` not set
+
+### Root Cause Analysis
+1. **Container Security**: Container configured with `read_only: true` for security hardening
+2. **Default Storage Location**: Memory MCP defaulted to writing `memory.json` in installation directory (`/usr/local/lib/...`)
+3. **Filesystem Restriction**: Entire container filesystem read-only, preventing writes outside mounted volumes
+4. **Missing Volume**: No writable volume provided for MCP data storage
+
+### Solution Implemented
+1. **Added Persistent MCP Data Volume**:
+   ```yaml
+   volumes:
+     - mcp-data:/app/mcp-data  # New writable volume for MCP data storage
+   ```
+
+2. **Configured Memory MCP Storage Path**:
+   ```json
+   {
+     "memory": {
+       "env": {
+         "MEMORY_FILE_PATH": "/app/mcp-data/memory.json"
+       }
+     }
+   }
+   ```
+
+3. **Updated docker-compose.yml.template** with new volume definition
+4. **Maintained Security**: Container remains read-only with controlled writable volumes
+
+### Verification
+- ✅ Container Status: Healthy
+- ✅ Memory MCP Health: `https://memory.mcp.home.pezzos.com/health` responds properly
+- ✅ Write Permissions: `/app/mcp-data/` directory writable (`touch /app/mcp-data/test-write.txt` succeeded)
+- ✅ Configuration: `MEMORY_FILE_PATH` properly set in converted config at `/tmp/config.json`
+- ✅ No EROFS Errors: All read-only filesystem errors eliminated from logs
+- ✅ Security Preserved: Container maintains read-only filesystem outside mounted volumes
+
+### Lessons Learned
+1. **MCP Storage Requirements**: Many MCP servers need persistent storage - investigate storage needs early
+2. **Security vs Functionality**: Read-only containers are secure but require careful volume planning for MCP servers with storage needs
+3. **Environment Variables**: Use `MEMORY_FILE_PATH` and similar environment variables to redirect MCP storage to writable volumes
+4. **Volume Scoping**: Create specific, minimal writable volumes rather than broad filesystem access
+5. **Investigation Process**: Concurrent tool usage (logs + mount + stats + config analysis) speeds up root cause identification
+6. **Documentation Update**: Added MCP storage configuration guidelines to CLAUDE.md for future reference
+
+---

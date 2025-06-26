@@ -30,7 +30,13 @@ Complete documentation is organized in the `docs/` directory:
 
 **Usage**: `/investigate [problem-description]`
 
-**When to use**:
+### `/reflect` - Session Documentation and Knowledge Preservation
+
+**Purpose**: Document session achievements, solutions implemented, and lessons learned for future reference and knowledge preservation.
+
+**Usage**: `/reflect [optional-session-focus]`
+
+**When to use `/investigate`**:
 - Complex bugs affecting multiple system components
 - Protocol compliance issues requiring systematic analysis
 - Performance problems needing methodical investigation
@@ -38,26 +44,117 @@ Complete documentation is organized in the `docs/` directory:
 - Recurring issues that need pattern analysis
 - Multi-server or multi-layer system problems
 
-**Workflow Process**:
+**When to use `/reflect`**:
+- End of significant development sessions
+- After implementing major features or fixes
+- Following successful problem resolution
+- When documentation needs updating with new knowledge
+- Before switching to different project areas
+- To create permanent record of session achievements
+
+**Investigation Workflow Process**:
 1. **Problem Definition** - Document clear problem statement and observable symptoms
 2. **Evidence Gathering** - Use TodoWrite to track investigation phases, collect logs, test hypotheses
 3. **Root Cause Analysis** - Analyze patterns, cross-reference with existing documentation
 4. **Solution Implementation** - Implement fixes based on root cause analysis
 5. **Documentation** - Update INVESTIGATIONS.md with findings and solutions
 
+**Reflection Workflow Process**:
+1. **Session Summary** - Review major accomplishments and changes made
+2. **Solution Documentation** - Record specific fixes, configurations, and code changes
+3. **Knowledge Capture** - Document lessons learned and breakthrough insights
+4. **Process Updates** - Update CLAUDE.md and documentation with new procedures
+5. **Future Reference** - Create searchable record for similar future issues
+
 **Investigation Structure**:
 - Creates TodoWrite list breaking down investigation into phases
-- Updates or creates INVESTIGATIONS.md with problem timeline
+- **REQUIRED**: Updates or creates INVESTIGATIONS.md with structured documentation
 - Establishes success criteria for resolution
 - Documents breakthrough findings and dead ends systematically
 - Ensures knowledge preservation for future reference
 
-**Example**:
+**Reflection Structure**:
+- Creates or updates SESSION-NOTES.md with session achievements
+- Documents specific technical solutions and their context
+- Records configuration changes and their rationale
+- Updates relevant documentation files (CLAUDE.md, troubleshooting guides)
+- Preserves knowledge for future sessions and team members
+
+**SESSION-NOTES.md Format**:
+```markdown
+# Session Notes: [Date] - [Brief Description]
+**Date**: [YYYY-MM-DD]
+**Duration**: [Time spent]
+**Focus**: [Main areas worked on]
+
+## Achievements
+- [Bullet point of major accomplishment]
+- [Another achievement with technical details]
+
+## Technical Changes Made
+### [Component/File Modified]
+- **Change**: [Description of what was changed]
+- **Rationale**: [Why this change was needed]
+- **Impact**: [Effect of the change]
+
+## Lessons Learned
+- [Key insight or best practice discovered]
+- [Process improvement or technique learned]
+
+## Updated Documentation
+- [File]: [What was updated and why]
+- [Reference]: [Links to new or updated docs]
+
+## Future Considerations
+- [Potential improvements identified]
+- [Areas that may need attention later]
+```
+
+**INVESTIGATIONS.md Format**:
+```markdown
+# Investigation: [Problem Title]
+**Date**: [YYYY-MM-DD]
+**Status**: [In Progress/Resolved/Blocked]
+
+## Problem Statement
+[Clear description of the issue and observable symptoms]
+
+## Evidence Gathered
+- [Timestamp]: [Finding/observation]
+- [Timestamp]: [Test result or log analysis]
+
+## Root Cause Analysis
+[Analysis of patterns and underlying causes]
+
+## Solution Implemented
+[Detailed solution steps and configuration changes]
+
+## Verification
+[How the solution was tested and confirmed]
+
+## Lessons Learned
+[Key insights for future reference]
+```
+
+**Investigation Example**:
 ```bash
 /investigate "Claude.ai shows connected but no tools appear"
 # Sets up investigation todos, creates INVESTIGATIONS.md section
 # Guides through systematic analysis of symptoms, hypotheses, testing
 # Documents final solution and updates relevant documentation
+```
+
+**Reflection Examples**:
+```bash
+/reflect "logging cleanup session"
+# Documents logging improvements made, code changes, and lessons learned
+# Updates SESSION-NOTES.md with technical details and rationale
+# Records configuration changes and their impact
+
+/reflect
+# General session documentation - reviews all changes made
+# Creates comprehensive record of session achievements
+# Updates relevant documentation files as needed
 ```
 
 ### Key Development Rules
@@ -123,6 +220,45 @@ Complete documentation is organized in the `docs/` directory:
    }
    ```
 
+#### MCP Server Storage and Environment Configuration
+**Storage Requirements**: Many MCP servers need persistent storage for data, cache, or configuration files.
+
+**Common Storage Patterns**:
+- **Memory/Knowledge Graph**: Requires writable file for persistent data storage
+- **Database Servers**: Need writable directory for database files  
+- **Cache Servers**: Require temporary but persistent cache storage
+- **Configuration Servers**: May need to write config or state files
+
+**Environment Variable Patterns**:
+```json
+{
+  "mcpServers": {
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "/app/mcp-data/memory.json"
+      }
+    },
+    "database-server": {
+      "command": "npx", 
+      "args": ["-y", "@example/database-mcp"],
+      "env": {
+        "DB_PATH": "/app/mcp-data/database/",
+        "DB_NAME": "mcp_storage.db"
+      }
+    }
+  }
+}
+```
+
+**Storage Volume Requirements**: When MCP servers need persistent storage, add appropriate volumes to docker-compose.yml.template:
+```yaml
+volumes:
+  - mcp-data:/app/mcp-data  # General MCP data storage
+  - mcp-cache:/app/mcp-cache  # Temporary but persistent cache
+```
+
 10. **Dynamic File Generation**: Both docker-compose.yml and Dockerfile are dynamically generated from templates using `make`
     - **Docker Compose**: `docker-compose.yml.template` → `docker-compose.yml` (auto-created, not tracked in git)
     - **Dockerfile**: `Dockerfile.template` → `Dockerfile` (auto-created, not tracked in git)  
@@ -172,11 +308,24 @@ Complete documentation is organized in the `docs/` directory:
       
     - **`make logs`**: Show service logs (requires running services)
     - **`make restart`**: Equivalent to `make down && make up`
-14. **Traefik Integration Modes**:
+14. **Secure Volume Management**: Balance security with functionality when adding writable storage
+    - **Security Principle**: Container remains `read_only: true` with minimal writable volumes
+    - **Required Volumes**: Only add writable volumes when MCP servers explicitly need persistent storage
+    - **Volume Scope**: Use specific volume paths (e.g., `/app/mcp-data/`) rather than broad filesystem access
+    - **Security Review**: Each new volume should be justified by specific MCP server requirements
+    
+    **Volume Addition Process**:
+    1. **Identify Need**: MCP server documentation or error logs indicate storage requirement
+    2. **Scope Minimally**: Create specific directory for the MCP server's needs
+    3. **Update Template**: Add volume to docker-compose.yml.template
+    4. **Configure Environment**: Set MCP server environment variables to use the writable path
+    5. **Test Security**: Verify container still maintains read-only filesystem outside of mounted volumes
+
+15. **Traefik Integration Modes**:
     - **Local Traefik** (`ENABLE_LOCAL_TRAEFIK=true`): Includes Traefik service in docker-compose, manages SSL certificates, exposes ports 80/443/8080
     - **External Traefik** (`ENABLE_LOCAL_TRAEFIK=false` or omitted): Uses external 'proxy' network, requires existing Traefik setup
 
-15. **Container Health Verification**: Always verify container health before testing external functionality:
+16. **Container Health Verification**: Always verify container health before testing external functionality:
     ```bash
     # Step 1: Wait for container to show (healthy) status
     docker-compose ps
@@ -225,11 +374,62 @@ Complete documentation is organized in the `docs/` directory:
     - **Pattern Identification**: Look for recurring error messages, timing correlations, specific trigger conditions
     - **Evidence Collection**: Gather logs from multiple sources (proxy, containers, external systems)
     - **Root Cause Analysis**: Differentiate between symptoms and underlying causes
+
+#### Systematic Evidence Gathering Protocol
+**Concurrent Tool Usage**: Use multiple tools simultaneously for faster diagnosis
+```bash
+# Example: Parallel evidence gathering for container issues
+docker logs container_name --tail=50    # Get recent logs
+docker stats container_name --no-stream  # Check resource usage  
+docker exec container_name mount | grep ro  # Check read-only mounts
+docker-compose ps  # Check service status
+```
+
+**Evidence Gathering Checklist**:
+1. **Container State**: Status, health, resource usage, process list
+2. **Application Logs**: Recent entries, error patterns, debug messages
+3. **System Configuration**: Mount points, permissions, environment variables
+4. **Network Connectivity**: Service endpoints, internal/external access
+5. **File System**: Directory permissions, available space, read/write tests
+6. **Package State**: Installed packages, binary locations, version conflicts
+
+**Concurrent Investigation Pattern**:
+- Use multiple Bash tool calls in parallel for independent checks
+- Batch file reads when examining multiple configuration files
+- Run Docker MCP tools alongside system commands for comprehensive analysis
+- Combine log analysis with configuration verification in single workflow
+
     - **Common Patterns**:
       - **Stdio Deadlocks**: `bufio.Scanner.Scan()` blocking, "context deadline exceeded", "file already closed"
       - **Process Hangs**: Unresponsive servers, timeout cascades, resource exhaustion
       - **Network Issues**: Connection refused, SSL certificate problems, DNS resolution failures
       - **Configuration Problems**: Invalid JSON, missing environment variables, permission issues
+
+#### MCP Server Error Patterns
+**Storage Permission Errors**:
+- `EROFS: read-only file system` - MCP server trying to write to read-only filesystem
+- `EACCES: permission denied` - Insufficient write permissions for data directories
+- `ENOENT: no such file or directory` - Missing writable volume mounts
+
+**Binary Discovery Failures**:
+- `command not found` - MCP server binary not pre-installed or not in PATH
+- `npm install` timeouts - Package installation delays causing MCP initialization failures
+- Binary path mismatches between pre-installation and runtime conversion
+
+**Protocol Compliance Issues**:
+- `Method not found` (code: -32601) - MCP server doesn't implement expected JSON-RPC methods
+- `Invalid params` (code: -32602) - Parameter mismatch between proxy and MCP server
+- `Internal error` (code: -32603) - MCP server internal failures (often storage-related)
+
+**Environment Configuration Issues**:
+- Environment variables not properly passed to converted binary commands
+- Path environment variables missing for MCP server dependencies
+- Configuration file paths not accessible from container runtime environment
+
+**Performance/Timeout Patterns**:
+- Health check failures during MCP server startup (first-time package installation)
+- Connection timeouts during npx package resolution
+- Memory/resource exhaustion from multiple concurrent MCP server startups
 
 17. **Multi-Layer Fix Implementation Strategy**:
     - **Assessment Phase**: Identify all affected system layers (application, stdio, process management, network)
