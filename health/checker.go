@@ -111,7 +111,7 @@ func (hc *HealthChecker) checkServerHealth(serverName string) {
 	if err != nil {
 		hc.handleUnhealthyServer(serverName, responseTime, err.Error())
 	} else {
-		hc.updateHealth(serverName, "healthy", responseTime, "")
+		hc.updateHealthQuietly(serverName, "healthy", responseTime, "")
 	}
 }
 
@@ -186,6 +186,26 @@ func (hc *HealthChecker) updateHealth(serverName, status string, responseTime in
 
 	if status == "healthy" {
 		health.ConsecutiveFails = 0
+	}
+}
+
+// updateHealthQuietly updates health status without logging success cases
+func (hc *HealthChecker) updateHealthQuietly(serverName, status string, responseTime int64, errorMsg string) {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+
+	health := hc.getOrCreateHealth(serverName)
+	health.Status = status
+	health.LastCheck = time.Now()
+	health.ResponseTime = responseTime
+	health.LastError = errorMsg
+
+	if status == "healthy" {
+		health.ConsecutiveFails = 0
+		// Only log health success occasionally to reduce noise
+		if health.ConsecutiveFails == 0 && responseTime > 5000 {
+			hc.logger.Debug("Server %s healthy (slow response: %dms)", serverName, responseTime)
+		}
 	}
 }
 

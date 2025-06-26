@@ -391,8 +391,7 @@ func (s *Server) sendMessageDirect(message []byte) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	s.logger.Debug("=== MCP SEND MESSAGE START (Server: %s) ===", s.Name)
-	s.logger.Debug("Sending message to server %s: %s", s.Name, string(message))
+	s.logger.Debug(">>> %s", s.Name)
 
 	if s.Stdin == nil {
 		s.logger.Error("Cannot send message to server %s: server not running", s.Name)
@@ -402,19 +401,17 @@ func (s *Server) sendMessageDirect(message []byte) error {
 	_, err := s.Stdin.Write(append(message, '\n'))
 	if err != nil {
 		s.logger.Error("Failed to send message to server %s: %v", s.Name, err)
-		s.logger.Debug("=== MCP SEND MESSAGE END (Server: %s) - FAILED ===", s.Name)
+		s.logger.Debug("<<< %s FAILED", s.Name)
 		return err
 	}
 
-	s.logger.Info("Successfully sent message to server %s", s.Name)
-	s.logger.Debug("=== MCP SEND MESSAGE END (Server: %s) - SUCCESS ===", s.Name)
+	s.logger.Debug("<<< %s OK", s.Name)
 	return nil
 }
 
 // SendAndReceive sends a request and waits for the response using the serialized queue
 func (s *Server) SendAndReceive(ctx context.Context, message []byte) ([]byte, error) {
-	s.logger.Debug("=== MCP SEND AND RECEIVE START (Server: %s) ===", s.Name)
-	s.logger.Debug("Sending message to server %s: %s", s.Name, string(message))
+	s.logger.Debug(">>> %s", s.Name)
 
 	// Create response channel
 	responseCh := make(chan RequestResult, 1)
@@ -440,11 +437,10 @@ func (s *Server) SendAndReceive(ctx context.Context, message []byte) ([]byte, er
 	case result := <-responseCh:
 		if result.Error != nil {
 			s.logger.Error("Failed to process request for server %s: %v", s.Name, result.Error)
-			s.logger.Debug("=== MCP SEND AND RECEIVE END (Server: %s) - FAILED ===", s.Name)
+			s.logger.Debug("<<< %s FAILED", s.Name)
 			return nil, result.Error
 		}
-		s.logger.Info("Successfully received response from server %s", s.Name)
-		s.logger.Debug("=== MCP SEND AND RECEIVE END (Server: %s) - SUCCESS ===", s.Name)
+		s.logger.Debug("<<< %s OK", s.Name)
 		return result.Response, nil
 	case <-ctx.Done():
 		s.logger.Error("Context cancelled while waiting for response from server %s", s.Name)
@@ -530,7 +526,7 @@ func (s *Server) readMessageDirect(ctx context.Context) ([]byte, error) {
 		if result.err != nil && result.err != io.EOF {
 			s.logger.Error("Failed to read message from server %s: %v", serverName, result.err)
 		} else if result.err == nil {
-			s.logger.Info("Successfully read message from server %s", serverName)
+			// Message read successfully - no need to log at INFO level
 		}
 		return result.data, result.err
 	case <-ctx.Done():
@@ -609,7 +605,7 @@ func (s *Server) ReadMessage(ctx context.Context) ([]byte, error) {
 		if result.err != nil && result.err != io.EOF {
 			s.logger.Error("Failed to read message from server %s: %v", serverName, result.err)
 		} else if result.err == nil {
-			s.logger.Info("Successfully read message from server %s", serverName)
+			// Message read successfully - no need to log at INFO level
 		}
 		return result.data, result.err
 	case <-ctx.Done():

@@ -265,7 +265,10 @@ func (l *Logger) detectLogLevel(message string, originalLevel LogLevel) LogLevel
 func (l *Logger) isHealthCheck(message string) bool {
 	return strings.Contains(message, "health_check") ||
 		strings.Contains(message, "ping") ||
-		strings.Contains(message, "=== MCP SEND AND RECEIVE") && strings.Contains(message, "health")
+		strings.Contains(message, "Health check summary") ||
+		strings.Contains(message, ">>> ") || // Simplified MCP communication markers
+		strings.Contains(message, "<<< ") ||
+		(strings.Contains(message, "=== MCP SEND AND RECEIVE") && strings.Contains(message, "health"))
 }
 
 // shouldSkipHealthLog implements health check log summarization
@@ -273,14 +276,14 @@ func (l *Logger) shouldSkipHealthLog() bool {
 	now := time.Now()
 
 	// Skip detailed health logs if we've seen too many recently
-	if now.Sub(l.lastHealthLog) < 5*time.Minute {
+	if now.Sub(l.lastHealthLog) < 10*time.Minute {
 		l.healthCheckCounter++
-		// After first 3 health checks in 5 minutes, only log every 10th
-		if l.healthCheckCounter > 3 && l.healthCheckCounter%10 != 0 {
+		// After first 2 health checks in 10 minutes, only log every 50th
+		if l.healthCheckCounter > 2 && l.healthCheckCounter%50 != 0 {
 			return true
 		}
 	} else {
-		// Reset counter after 5 minutes of silence
+		// Reset counter after 10 minutes of silence
 		l.healthCheckCounter = 0
 	}
 
