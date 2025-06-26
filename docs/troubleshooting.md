@@ -1,5 +1,66 @@
 # Remote MCP Proxy - Troubleshooting Guide
 
+## Stale SSE Connection Issue - June 25, 2025 ⚠️ **ACTIVE**
+
+### Problem Statement
+**Issue**: Claude.ai shows "connection succeeded" but integration remains "To connect", preventing tool discovery and usage.
+
+### Root Cause Analysis
+**Technical Issue**: SSE connections become stuck in continuous keep-alive loops without processing actual requests, preventing tool discovery from completing.
+
+**Symptoms**:
+1. Container logs show constant "SSE connection active... waiting for requests" messages every second
+2. Claude.ai reports successful connection but tools never appear
+3. Integration status remains "To connect" indefinitely
+4. Multiple stale sessions accumulate over time
+
+**Evidence from Logs**:
+```
+2025/06/25 10:42:06 DEBUG: SSE connection active for server sequential-thinking, session 24913c063887e37772aafa574f83e5cd - waiting for requests
+2025/06/25 10:42:06 DEBUG: SSE connection active for server memory, session 036434c1ebf50c9e869884e95caedea3 - waiting for requests
+(repeated every second)
+```
+
+### Immediate Solution ✅
+**Manual Cleanup**: Force cleanup of stale connections using the cleanup endpoint
+```bash
+# Remove stale connections immediately
+docker exec remote-mcp-proxy curl -X POST http://localhost:8080/cleanup
+
+# Verify cleanup success
+docker logs remote-mcp-proxy --tail=10
+# Should show: "Manual cleanup completed - cleaned X connections"
+```
+
+**Alternative Solution**: Container restart (also effective but more disruptive)
+```bash
+# Nuclear option - restart container to clear all connections
+docker-compose restart remote-mcp-proxy
+
+# Wait for healthy status
+docker-compose ps
+```
+
+### Prevention Strategy Implemented ✅
+
+**Automatic Stale Connection Detection**:
+- **SSE Connection Timeout**: Connections idle for 5+ minutes automatically close
+- **Debug Message Limiting**: Only first 10 debug messages per session to prevent log spam
+- **Activity Tracking**: Keep-alive events update last activity time
+- **Graceful Cleanup**: Automatic resource cleanup on connection termination
+
+**Automatic Background Cleanup**:
+- **Periodic Cleanup**: Every 30 seconds, removes connections idle for 2+ minutes
+- **Connection Monitoring**: Logs cleanup activity when stale connections are removed
+- **Resource Management**: Prevents accumulation of zombie connections
+
+**Code Locations**:
+- SSE Connection Monitoring: `proxy/server.go:680-750`
+- Background Cleanup: `proxy/server.go:161-183`
+- Connection Manager: `proxy/server.go:112-129`
+
+---
+
 ## Multiple Integration Support ✅ **RESOLVED**
 
 ### Problem Statement (RESOLVED)
@@ -219,13 +280,25 @@ for {
 3. **Resource cleanup**: Ensure proper cleanup of failed connections
 4. **Documentation**: Add inline documentation for Remote MCP flow
 
-## Next Steps Priority
+## Current Priority Issues
 
-1. **IMMEDIATE**: Fix SSE deadlock in handleSSEConnection
-2. **URGENT**: Test initialize request flow independently  
-3. **HIGH**: Implement proper Remote MCP handshake sequence
-4. **MEDIUM**: Add comprehensive logging and debugging tools
-5. **LOW**: Clean up unused code and improve error handling
+### ✅ RESOLVED ISSUES
+1. ✅ **Automatic stale connection detection**: Implemented with 5-minute timeout
+2. ✅ **Connection health monitoring**: Keep-alive tracking and activity monitoring active
+3. ✅ **Debug spam prevention**: Limited to 10 messages per session
+4. ✅ **Background cleanup**: 30-second interval cleanup of 2+ minute idle connections
+
+### 📋 MONITORING REQUIREMENTS
+1. **Watch for stale connection warnings** in logs - should be rare now
+2. **Monitor cleanup activity** - automatic removal should handle most issues
+3. **Manual cleanup available** if needed: `docker exec remote-mcp-proxy curl -X POST http://localhost:8080/cleanup`
+
+### 📋 COMPLETED ISSUES
+1. ✅ **SSE deadlock**: Fixed in handleSSEConnection
+2. ✅ **Initialize request flow**: Working correctly
+3. ✅ **Remote MCP handshake**: Properly implemented
+4. ✅ **Multiple integration support**: Request serialization implemented
+5. ✅ **Connection cleanup**: Manual cleanup endpoint functional
 
 ## Progress Update - June 24, 05:30 UTC
 

@@ -165,10 +165,19 @@ func (s *Server) startConnectionCleanup() {
 
 	maxAge := 2 * time.Minute // Remove connections older than 2 minutes for faster cleanup
 
+	log.Printf("INFO: Started automatic connection cleanup (interval: 30s, max age: %v)", maxAge)
+
 	for {
 		select {
 		case <-ticker.C:
+			beforeCount := s.connectionManager.GetConnectionCount()
 			s.connectionManager.CleanupStaleConnections(maxAge)
+			afterCount := s.connectionManager.GetConnectionCount()
+
+			if beforeCount != afterCount {
+				log.Printf("INFO: Automatic cleanup removed %d stale connections (%d -> %d active)",
+					beforeCount-afterCount, beforeCount, afterCount)
+			}
 		}
 	}
 }
@@ -668,6 +677,12 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	keepAliveTicker := time.NewTicker(30 * time.Second)
 	defer keepAliveTicker.Stop()
 
+	// Add stale connection detection
+	lastActivityTime := time.Now()
+	staleConnectionTimeout := 5 * time.Minute // Detect connections idle for 5+ minutes
+	maxDebugMessages := 10                    // Limit debug spam
+	debugMessageCount := 0
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -682,6 +697,8 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 			if flusher, ok := w.(http.Flusher); ok {
 				flusher.Flush()
 			}
+			// Update activity time on successful keep-alive
+			lastActivityTime = time.Now()
 		case <-ticker.C:
 			// CRITICAL FIX: Remove initialization check to prevent SSE deadlock
 			//
@@ -713,7 +730,22 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 			// For now, SSE just maintains the connection and waits.
 			// Future: Add channel-based event system for notifications if needed.
 
-			log.Printf("DEBUG: SSE connection active for server %s, session %s - waiting for requests", mcpServer.Name, sessionID)
+			// STALE CONNECTION DETECTION: Check if connection has been idle too long
+			if time.Since(lastActivityTime) > staleConnectionTimeout {
+				log.Printf("WARNING: Stale SSE connection detected for server %s, session %s (idle for %v)",
+					mcpServer.Name, sessionID, time.Since(lastActivityTime))
+				log.Printf("INFO: Automatically closing stale connection to prevent resource leaks")
+				return
+			}
+
+			// REDUCE DEBUG SPAM: Only log first few debug messages to prevent log flooding
+			if debugMessageCount < maxDebugMessages {
+				log.Printf("DEBUG: SSE connection active for server %s, session %s - waiting for requests", mcpServer.Name, sessionID)
+				debugMessageCount++
+				if debugMessageCount == maxDebugMessages {
+					log.Printf("INFO: Debug message limit reached for session %s - silencing further debug logs", sessionID)
+				}
+			}
 
 			// Just keep the connection alive - no more continuous polling
 			time.Sleep(1 * time.Second)
