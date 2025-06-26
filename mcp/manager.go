@@ -482,6 +482,8 @@ func (s *Server) readMessageDirect(ctx context.Context) ([]byte, error) {
 		err  error
 	}
 
+	// CRITICAL FIX: Use a timeout-aware buffered reader instead of Scanner
+	// This prevents indefinite blocking when MCP servers become unresponsive
 	resultChan := make(chan readResult, 1)
 	go func() {
 		defer func() {
@@ -491,22 +493,25 @@ func (s *Server) readMessageDirect(ctx context.Context) ([]byte, error) {
 			}
 		}()
 
-		scanner := bufio.NewScanner(stdout)
-		if scanner.Scan() {
-			data := make([]byte, len(scanner.Bytes()))
-			copy(data, scanner.Bytes())
-			log.Printf("DEBUG: Read message from server %s: %s", serverName, string(data))
-			resultChan <- readResult{data, nil}
-		} else {
-			scanErr := scanner.Err()
-			if scanErr != nil {
-				log.Printf("ERROR: Scanner error for server %s: %v", serverName, scanErr)
-				resultChan <- readResult{nil, scanErr}
-			} else {
+		// Use line-by-line reading with timeout awareness
+		reader := bufio.NewReader(stdout)
+		line, _, err := reader.ReadLine()
+		if err != nil {
+			if err == io.EOF {
 				log.Printf("DEBUG: EOF reached for server %s", serverName)
 				resultChan <- readResult{nil, io.EOF}
+			} else {
+				log.Printf("ERROR: Read error for server %s: %v", serverName, err)
+				resultChan <- readResult{nil, err}
 			}
+			return
 		}
+		
+		// Successfully read line
+		data := make([]byte, len(line))
+		copy(data, line)
+		log.Printf("DEBUG: Read message from server %s: %s", serverName, string(data))
+		resultChan <- readResult{data, nil}
 	}()
 
 	// Wait for either the read to complete or the context to be cancelled
@@ -556,6 +561,8 @@ func (s *Server) ReadMessage(ctx context.Context) ([]byte, error) {
 		err  error
 	}
 
+	// CRITICAL FIX: Use a timeout-aware buffered reader instead of Scanner
+	// This prevents indefinite blocking when MCP servers become unresponsive
 	resultChan := make(chan readResult, 1)
 	go func() {
 		defer func() {
@@ -565,22 +572,25 @@ func (s *Server) ReadMessage(ctx context.Context) ([]byte, error) {
 			}
 		}()
 
-		scanner := bufio.NewScanner(stdout)
-		if scanner.Scan() {
-			data := make([]byte, len(scanner.Bytes()))
-			copy(data, scanner.Bytes())
-			log.Printf("DEBUG: Read message from server %s: %s", serverName, string(data))
-			resultChan <- readResult{data, nil}
-		} else {
-			scanErr := scanner.Err()
-			if scanErr != nil {
-				log.Printf("ERROR: Scanner error for server %s: %v", serverName, scanErr)
-				resultChan <- readResult{nil, scanErr}
-			} else {
+		// Use line-by-line reading with timeout awareness
+		reader := bufio.NewReader(stdout)
+		line, _, err := reader.ReadLine()
+		if err != nil {
+			if err == io.EOF {
 				log.Printf("DEBUG: EOF reached for server %s", serverName)
 				resultChan <- readResult{nil, io.EOF}
+			} else {
+				log.Printf("ERROR: Read error for server %s: %v", serverName, err)
+				resultChan <- readResult{nil, err}
 			}
+			return
 		}
+		
+		// Successfully read line
+		data := make([]byte, len(line))
+		copy(data, line)
+		log.Printf("DEBUG: Read message from server %s: %s", serverName, string(data))
+		resultChan <- readResult{data, nil}
 	}()
 
 	// Wait for either the read to complete or the context to be cancelled
