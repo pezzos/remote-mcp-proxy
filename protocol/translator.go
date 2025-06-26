@@ -3,10 +3,11 @@ package protocol
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"remote-mcp-proxy/logger"
 )
 
 // JSONRPCMessage represents a JSON-RPC 2.0 message
@@ -131,10 +132,10 @@ func (t *Translator) MCPToRemote(mcpData []byte) ([]byte, error) {
 
 	// Enhanced logging for tool discovery debugging
 	if messageType == "response" && jsonrpcMsg.ID != nil {
-		log.Printf("=== TOOL DISCOVERY DEBUG ===")
-		log.Printf("DEBUG: Processing MCP response - ID: %v, Method: %s", jsonrpcMsg.ID, jsonrpcMsg.Method)
-		log.Printf("DEBUG: Raw MCP response: %s", string(mcpData))
-		log.Printf("DEBUG: Has result: %v, Has error: %v", jsonrpcMsg.Result != nil, jsonrpcMsg.Error != nil)
+		logger.System().Debug("=== TOOL DISCOVERY DEBUG ===")
+		logger.System().Debug("DEBUG: Processing MCP response - ID: %v, Method: %s", jsonrpcMsg.ID, jsonrpcMsg.Method)
+		logger.System().Debug("DEBUG: Raw MCP response: %s", string(mcpData))
+		logger.System().Debug("DEBUG: Has result: %v, Has error: %v", jsonrpcMsg.Result != nil, jsonrpcMsg.Error != nil)
 	}
 
 	// Transform tool names in tools/list responses for Claude.ai compatibility
@@ -143,13 +144,13 @@ func (t *Translator) MCPToRemote(mcpData []byte) ([]byte, error) {
 		// Check if this is a tools/list response for enhanced logging
 		if resultMap, ok := result.(map[string]interface{}); ok {
 			if tools, exists := resultMap["tools"]; exists {
-				log.Printf("DEBUG: Found tools/list response with %d tools before normalization", func() int {
+				logger.System().Debug("DEBUG: Found tools/list response with %d tools before normalization", func() int {
 					if toolsList, ok := tools.([]interface{}); ok {
 						return len(toolsList)
 					}
 					return 0
 				}())
-				log.Printf("DEBUG: Tools before normalization: %+v", tools)
+				logger.System().Debug("DEBUG: Tools before normalization: %+v", tools)
 			}
 		}
 
@@ -158,7 +159,7 @@ func (t *Translator) MCPToRemote(mcpData []byte) ([]byte, error) {
 		// Log after normalization
 		if resultMap, ok := result.(map[string]interface{}); ok {
 			if tools, exists := resultMap["tools"]; exists {
-				log.Printf("DEBUG: Tools after normalization: %+v", tools)
+				logger.System().Debug("DEBUG: Tools after normalization: %+v", tools)
 			}
 		}
 	}
@@ -180,9 +181,9 @@ func (t *Translator) MCPToRemote(mcpData []byte) ([]byte, error) {
 
 	// Enhanced logging for Remote MCP message format validation
 	if messageType == "response" && jsonrpcMsg.ID != nil {
-		log.Printf("DEBUG: Final Remote MCP message: %s", string(remoteMsgBytes))
-		log.Printf("DEBUG: Remote MCP message type: %s, ID: %v", remoteMsg.Type, remoteMsg.ID)
-		log.Printf("=== TOOL DISCOVERY DEBUG END ===")
+		logger.System().Debug("DEBUG: Final Remote MCP message: %s", string(remoteMsgBytes))
+		logger.System().Debug("DEBUG: Remote MCP message type: %s, ID: %v", remoteMsg.Type, remoteMsg.ID)
+		logger.System().Debug("=== TOOL DISCOVERY DEBUG END ===")
 	}
 
 	return remoteMsgBytes, nil

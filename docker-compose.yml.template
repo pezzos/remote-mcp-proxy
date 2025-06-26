@@ -45,6 +45,7 @@ services:
     restart: unless-stopped
     volumes:
       - ./config.json:/app/config.json:ro
+      - ./logs:/app/logs
     read_only: true
     tmpfs:
       - /tmp:exec
@@ -56,6 +57,10 @@ services:
     environment:
       - GO_ENV=production
       - DOMAIN=${DOMAIN}
+      - LOG_LEVEL_SYSTEM=${LOG_LEVEL_SYSTEM:-INFO}
+      - LOG_LEVEL_MCP=${LOG_LEVEL_MCP:-DEBUG}
+      - LOG_RETENTION_SYSTEM=${LOG_RETENTION_SYSTEM:-24h}
+      - LOG_RETENTION_MCP=${LOG_RETENTION_MCP:-12h}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s

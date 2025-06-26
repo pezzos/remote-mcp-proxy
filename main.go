@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -10,12 +9,18 @@ import (
 	"time"
 
 	"remote-mcp-proxy/config"
+	"remote-mcp-proxy/logger"
 	"remote-mcp-proxy/mcp"
 	"remote-mcp-proxy/proxy"
 )
 
 func main() {
-	log.Println("Starting Remote MCP Proxy...")
+	// Initialize logger system
+	loggerManager := logger.GetManager()
+	defer loggerManager.Close()
+
+	sysLog := logger.System()
+	sysLog.Info("Starting Remote MCP Proxy...")
 
 	// Load configuration
 	configPath := os.Getenv("CONFIG_FILE")
@@ -24,7 +29,8 @@ func main() {
 	}
 	cfg, err := config.Load(configPath)
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		sysLog.Error("Failed to load configuration: %v", err)
+		os.Exit(1)
 	}
 
 	// Create MCP manager
@@ -32,7 +38,8 @@ func main() {
 
 	// Start MCP servers
 	if err := mcpManager.StartAll(); err != nil {
-		log.Fatalf("Failed to start MCP servers: %v", err)
+		sysLog.Error("Failed to start MCP servers: %v", err)
+		os.Exit(1)
 	}
 
 	// Create proxy server with configuration
@@ -47,9 +54,10 @@ func main() {
 
 	// Start server in goroutine
 	go func() {
-		log.Printf("Server starting on %s (Domain: %s)", addr, cfg.GetDomain())
+		sysLog.Info("Server starting on %s (Domain: %s)", addr, cfg.GetDomain())
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			sysLog.Error("Server failed: %v", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -58,18 +66,18 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	sysLog.Info("Shutting down server...")
 
 	// Graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("Server forced to shutdown: %v", err)
+		sysLog.Warn("Server forced to shutdown: %v", err)
 	}
 
 	// Stop MCP servers
 	mcpManager.StopAll()
 
-	log.Println("Server exited")
+	sysLog.Info("Server exited")
 }

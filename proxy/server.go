@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"remote-mcp-proxy/config"
+	"remote-mcp-proxy/logger"
 	"remote-mcp-proxy/mcp"
 	"remote-mcp-proxy/protocol"
 )
@@ -58,7 +58,7 @@ func (cm *ConnectionManager) AddConnection(sessionID, serverName string, ctx con
 
 	// Check connection limit
 	if len(cm.connections) >= cm.maxConnections {
-		log.Printf("WARNING: Connection limit reached (%d), rejecting new connection for session %s", cm.maxConnections, sessionID)
+		logger.System().Warn(" Connection limit reached (%d), rejecting new connection for session %s", cm.maxConnections, sessionID)
 		return fmt.Errorf("connection limit reached: %d", cm.maxConnections)
 	}
 
@@ -71,7 +71,7 @@ func (cm *ConnectionManager) AddConnection(sessionID, serverName string, ctx con
 		Cancel:      cancel,
 	}
 
-	log.Printf("INFO: Added connection for session %s (total: %d/%d)", sessionID, len(cm.connections), cm.maxConnections)
+	logger.System().Info("INFO: Added connection for session %s (total: %d/%d)", sessionID, len(cm.connections), cm.maxConnections)
 	return nil
 }
 
@@ -86,7 +86,7 @@ func (cm *ConnectionManager) RemoveConnection(sessionID string) {
 			conn.Cancel()
 		}
 		delete(cm.connections, sessionID)
-		log.Printf("INFO: Removed connection for session %s (remaining: %d)", sessionID, len(cm.connections))
+		logger.System().Info("INFO: Removed connection for session %s (remaining: %d)", sessionID, len(cm.connections))
 	}
 }
 
@@ -128,7 +128,7 @@ func (cm *ConnectionManager) CleanupStaleConnections(maxAge time.Duration) {
 	}
 
 	if len(removed) > 0 {
-		log.Printf("INFO: Cleaned up %d stale connections: %v", len(removed), removed)
+		logger.System().Info("INFO: Cleaned up %d stale connections: %v", len(removed), removed)
 	}
 }
 
@@ -151,9 +151,9 @@ func NewServerWithConfig(mcpManager *mcp.Manager, cfg *config.Config) *Server {
 	// Start background cleanup routine
 	go server.startConnectionCleanup()
 
-	log.Printf("INFO: Created proxy server with max %d connections", maxConnections)
+	logger.System().Info("INFO: Created proxy server with max %d connections", maxConnections)
 	if cfg != nil {
-		log.Printf("INFO: Configured domain: %s", cfg.GetDomain())
+		logger.System().Info("INFO: Configured domain: %s", cfg.GetDomain())
 	}
 	return server
 }
@@ -165,7 +165,7 @@ func (s *Server) startConnectionCleanup() {
 
 	maxAge := 2 * time.Minute // Remove connections older than 2 minutes for faster cleanup
 
-	log.Printf("INFO: Started automatic connection cleanup (interval: 30s, max age: %v)", maxAge)
+	logger.System().Info("INFO: Started automatic connection cleanup (interval: 30s, max age: %v)", maxAge)
 
 	for {
 		select {
@@ -175,7 +175,7 @@ func (s *Server) startConnectionCleanup() {
 			afterCount := s.connectionManager.GetConnectionCount()
 
 			if beforeCount != afterCount {
-				log.Printf("INFO: Automatic cleanup removed %d stale connections (%d -> %d active)",
+				logger.System().Info("INFO: Automatic cleanup removed %d stale connections (%d -> %d active)",
 					beforeCount-afterCount, beforeCount, afterCount)
 			}
 		}
@@ -198,12 +198,12 @@ func (s *Server) subdomainMiddleware(next http.Handler) http.Handler {
 		// Expected format: {server}.mcp.{domain}
 		if len(parts) >= 3 && parts[1] == "mcp" {
 			serverName := parts[0]
-			log.Printf("DEBUG: Extracted server name '%s' from host '%s'", serverName, r.Host)
+			logger.System().Debug(" Extracted server name '%s' from host '%s'", serverName, r.Host)
 
 			// Validate server exists in configuration (if config is available)
 			if s.config != nil {
 				if _, exists := s.config.MCPServers[serverName]; !exists {
-					log.Printf("DEBUG: Server '%s' not found in configuration", serverName)
+					logger.System().Debug(" Server '%s' not found in configuration", serverName)
 					// Don't add to context if server doesn't exist
 					next.ServeHTTP(w, r)
 					return
@@ -226,19 +226,19 @@ func (s *Server) subdomainMiddleware(next http.Handler) http.Handler {
 					// Validate server exists in configuration (if config is available)
 					if s.config != nil {
 						if _, exists := s.config.MCPServers[serverName]; exists {
-							log.Printf("DEBUG: Extracted server name '%s' from path '%s' (subdomain fallback)", serverName, r.URL.Path)
+							logger.System().Debug(" Extracted server name '%s' from path '%s' (subdomain fallback)", serverName, r.URL.Path)
 							// Add server name to request context
 							ctx := context.WithValue(r.Context(), "mcpServer", serverName)
 							r = r.WithContext(ctx)
 						} else {
-							log.Printf("DEBUG: Path-based server '%s' not found in configuration", serverName)
+							logger.System().Debug(" Path-based server '%s' not found in configuration", serverName)
 						}
 					}
 				}
 			}
 
 			if r.Context().Value("mcpServer") == nil {
-				log.Printf("DEBUG: Host '%s' doesn't match subdomain pattern {server}.mcp.{domain} and no valid server in path", r.Host)
+				logger.System().Debug(" Host '%s' doesn't match subdomain pattern {server}.mcp.{domain} and no valid server in path", r.Host)
 			}
 		}
 
@@ -285,15 +285,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write([]byte(`{"status":"healthy"}`)); err != nil {
-		log.Printf("ERROR: Failed to write health response: %v", err)
+		logger.System().Error(" Failed to write health response: %v", err)
 	} else {
-		log.Printf("DEBUG: Health check response sent successfully")
+		logger.System().Debug(" Health check response sent successfully")
 	}
 }
 
 // handleListMCP returns the list of all configured MCP servers and their status
 func (s *Server) handleListMCP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("INFO: Handling listmcp request")
+	logger.System().Info("INFO: Handling listmcp request")
 
 	servers := s.mcpManager.GetAllServers()
 
@@ -304,16 +304,16 @@ func (s *Server) handleListMCP(w http.ResponseWriter, r *http.Request) {
 		"servers": servers,
 		"count":   len(servers),
 	}); err != nil {
-		log.Printf("ERROR: Failed to encode listmcp response: %v", err)
+		logger.System().Error(" Failed to encode listmcp response: %v", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	} else {
-		log.Printf("INFO: Successfully returned list of %d MCP servers", len(servers))
+		logger.System().Info("INFO: Successfully returned list of %d MCP servers", len(servers))
 	}
 }
 
 // handleCleanup manually cleans up stale connections and sessions
 func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
-	log.Printf("INFO: Handling manual cleanup request")
+	logger.System().Info("INFO: Handling manual cleanup request")
 
 	// Get current connections before cleanup
 	connectionsBefore := s.connectionManager.GetConnections()
@@ -349,10 +349,10 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("ERROR: Failed to encode cleanup response: %v", err)
+		logger.System().Error(" Failed to encode cleanup response: %v", err)
 		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
 	} else {
-		log.Printf("INFO: Manual cleanup completed - cleaned %d connections, %d remaining", cleanedCount, countAfter)
+		logger.System().Info("INFO: Manual cleanup completed - cleaned %d connections, %d remaining", cleanedCount, countAfter)
 	}
 }
 
@@ -361,19 +361,19 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	serverName := vars["server"]
 
-	log.Printf("INFO: Handling listtools request for server: %s", serverName)
+	logger.System().Info("INFO: Handling listtools request for server: %s", serverName)
 
 	// Get the MCP server
 	mcpServer, exists := s.mcpManager.GetServer(serverName)
 	if !exists {
-		log.Printf("ERROR: MCP server '%s' not found", serverName)
+		logger.System().Error(" MCP server '%s' not found", serverName)
 		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
 		return
 	}
 
 	// Check if server is running
 	if !mcpServer.IsRunning() {
-		log.Printf("ERROR: MCP server '%s' is not running", serverName)
+		logger.System().Error(" MCP server '%s' is not running", serverName)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusServiceUnavailable)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -394,7 +394,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 
 	requestBytes, err := json.Marshal(toolsListRequest)
 	if err != nil {
-		log.Printf("ERROR: Failed to marshal tools/list request: %v", err)
+		logger.System().Error(" Failed to marshal tools/list request: %v", err)
 		http.Error(w, "Failed to create tools request", http.StatusInternalServerError)
 		return
 	}
@@ -405,7 +405,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 
 	responseBytes, err := mcpServer.SendAndReceive(ctx, requestBytes)
 	if err != nil {
-		log.Printf("ERROR: Failed to send/receive tools/list request to server %s: %v", serverName, err)
+		logger.System().Error(" Failed to send/receive tools/list request to server %s: %v", serverName, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -427,7 +427,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	// DO NOT RETURN RAW RESPONSE - this breaks Claude.ai tool discovery
 	normalizedResponse, err := s.translator.MCPToRemote(responseBytes)
 	if err != nil {
-		log.Printf("ERROR: Failed to normalize tools/list response from server %s: %v", serverName, err)
+		logger.System().Error(" Failed to normalize tools/list response from server %s: %v", serverName, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -441,7 +441,7 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	// Parse the normalized response
 	var normalizedMCPResponse map[string]interface{}
 	if err := json.Unmarshal(normalizedResponse, &normalizedMCPResponse); err != nil {
-		log.Printf("ERROR: Failed to parse normalized tools/list response from server %s: %v", serverName, err)
+		logger.System().Error(" Failed to parse normalized tools/list response from server %s: %v", serverName, err)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -462,9 +462,9 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("ERROR: Failed to encode listtools response: %v", err)
+		logger.System().Error(" Failed to encode listtools response: %v", err)
 	} else {
-		log.Printf("INFO: Successfully returned normalized tools list for server %s", serverName)
+		logger.System().Info("INFO: Successfully returned normalized tools list for server %s", serverName)
 	}
 }
 
@@ -477,9 +477,9 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		if pathServer, exists := vars["server"]; exists && pathServer != "" {
 			serverName = pathServer
-			log.Printf("DEBUG: Using server name '%s' from URL path", serverName)
+			logger.System().Debug(" Using server name '%s' from URL path", serverName)
 		} else {
-			log.Printf("ERROR: No server name found in context or URL path for host: %s, path: %s", r.Host, r.URL.Path)
+			logger.System().Error(" No server name found in context or URL path for host: %s, path: %s", r.Host, r.URL.Path)
 			http.Error(w, "Invalid request format. Expected: {server}.mcp.{domain}/sse or /{server}/sse", http.StatusBadRequest)
 			return
 		}
@@ -488,20 +488,20 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	// Validate server exists
 	mcpServer, exists := s.mcpManager.GetServer(serverName)
 	if !exists {
-		log.Printf("ERROR: MCP server '%s' not found", serverName)
+		logger.System().Error(" MCP server '%s' not found", serverName)
 		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
 		return
 	}
 
 	// Comprehensive request logging
-	log.Printf("=== MCP REQUEST START ===")
-	log.Printf("INFO: Method: %s, URL: %s, Server: %s (from subdomain)", r.Method, r.URL.String(), serverName)
-	log.Printf("INFO: Remote Address: %s", r.RemoteAddr)
-	log.Printf("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
-	log.Printf("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
-	log.Printf("INFO: Accept: %s", r.Header.Get("Accept"))
-	log.Printf("INFO: Origin: %s", r.Header.Get("Origin"))
-	log.Printf("INFO: Authorization: %s", func() string {
+	logger.System().Info("=== MCP REQUEST START ===")
+	logger.System().Info("INFO: Method: %s, URL: %s, Server: %s (from subdomain)", r.Method, r.URL.String(), serverName)
+	logger.System().Info("INFO: Remote Address: %s", r.RemoteAddr)
+	logger.System().Info("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
+	logger.System().Info("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
+	logger.System().Info("INFO: Accept: %s", r.Header.Get("Accept"))
+	logger.System().Info("INFO: Origin: %s", r.Header.Get("Origin"))
+	logger.System().Info("INFO: Authorization: %s", func() string {
 		auth := r.Header.Get("Authorization")
 		if auth != "" {
 			if len(auth) > 20 {
@@ -515,51 +515,51 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 	// Log all headers starting with X- or Mcp-
 	for name, values := range r.Header {
 		if strings.HasPrefix(strings.ToLower(name), "x-") || strings.HasPrefix(strings.ToLower(name), "mcp-") {
-			log.Printf("INFO: Header %s: %v", name, values)
+			logger.System().Info("INFO: Header %s: %v", name, values)
 		}
 	}
 
 	// Validate authentication
-	log.Printf("INFO: Validating authentication...")
+	logger.System().Info("INFO: Validating authentication...")
 	if !s.validateAuthentication(r) {
-		log.Printf("ERROR: Authentication failed for request from %s", r.RemoteAddr)
-		log.Printf("=== MCP REQUEST END (AUTH FAILED) ===")
+		logger.System().Error(" Authentication failed for request from %s", r.RemoteAddr)
+		logger.System().Info("=== MCP REQUEST END (AUTH FAILED) ===")
 		// Add WWW-Authenticate header for proper OAuth Bearer token flow
 		w.Header().Set("WWW-Authenticate", "Bearer realm=\"Remote MCP Server\"")
 		w.Header().Set("Content-Type", "application/json")
 		http.Error(w, `{"error":"unauthorized","error_description":"Bearer token required for Remote MCP access"}`, http.StatusUnauthorized)
 		return
 	}
-	log.Printf("SUCCESS: Authentication passed")
+	logger.System().Info("SUCCESS: Authentication passed")
 
-	log.Printf("SUCCESS: Found MCP server: %s (running: %v)", serverName, mcpServer.IsRunning())
+	logger.System().Info("SUCCESS: Found MCP server: %s (running: %v)", serverName, mcpServer.IsRunning())
 
 	// Handle based on request method
-	log.Printf("INFO: Handling request method: %s", r.Method)
+	logger.System().Info("INFO: Handling request method: %s", r.Method)
 	switch r.Method {
 	case "GET":
-		log.Printf("INFO: Starting SSE connection handling...")
+		logger.System().Info("INFO: Starting SSE connection handling...")
 		s.handleSSEConnection(w, r, mcpServer)
-		log.Printf("=== MCP REQUEST END (SSE) ===")
+		logger.System().Info("=== MCP REQUEST END (SSE) ===")
 	case "POST":
-		log.Printf("INFO: Starting POST message handling...")
+		logger.System().Info("INFO: Starting POST message handling...")
 		s.handleMCPMessage(w, r, mcpServer)
-		log.Printf("=== MCP REQUEST END (POST) ===")
+		logger.System().Info("=== MCP REQUEST END (POST) ===")
 	default:
-		log.Printf("ERROR: Method not allowed: %s", r.Method)
-		log.Printf("=== MCP REQUEST END (METHOD NOT ALLOWED) ===")
+		logger.System().Error(" Method not allowed: %s", r.Method)
+		logger.System().Info("=== MCP REQUEST END (METHOD NOT ALLOWED) ===")
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
 // handleSSEConnection establishes a Server-Sent Events connection
 func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcpServer *mcp.Server) {
-	log.Printf("=== SSE CONNECTION START ===")
-	log.Printf("INFO: Setting up SSE connection for server: %s", mcpServer.Name)
+	logger.System().Info("=== SSE CONNECTION START ===")
+	logger.System().Info("INFO: Setting up SSE connection for server: %s", mcpServer.Name)
 
 	// Get or generate session ID
 	sessionID := s.getSessionID(r)
-	log.Printf("INFO: Session ID for SSE connection: %s", sessionID)
+	logger.System().Info("INFO: Session ID for SSE connection: %s", sessionID)
 
 	// CRITICAL FIX: Register session in translator immediately
 	//
@@ -570,7 +570,7 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	// This allows the session endpoint to accept initialize requests for
 	// sessions created via SSE connections.
 	s.translator.RegisterSession(sessionID)
-	log.Printf("SUCCESS: Session %s registered in translator", sessionID)
+	logger.System().Info("SUCCESS: Session %s registered in translator", sessionID)
 
 	// Create cancellable context for this connection
 	// Use background context to avoid dependency on HTTP request context
@@ -580,40 +580,40 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	// Monitor HTTP request context for disconnection
 	go func() {
 		<-r.Context().Done()
-		log.Printf("INFO: HTTP request context cancelled for session %s, triggering cleanup", sessionID)
+		logger.System().Info("INFO: HTTP request context cancelled for session %s, triggering cleanup", sessionID)
 		cancel()
 	}()
 
 	// Check connection limits and add to manager
-	log.Printf("INFO: Adding connection to manager...")
+	logger.System().Info("INFO: Adding connection to manager...")
 	if err := s.connectionManager.AddConnection(sessionID, mcpServer.Name, ctx, cancel); err != nil {
-		log.Printf("ERROR: Failed to add connection for session %s: %v", sessionID, err)
-		log.Printf("=== SSE CONNECTION END (CONNECTION LIMIT) ===")
+		logger.System().Error(" Failed to add connection for session %s: %v", sessionID, err)
+		logger.System().Info("=== SSE CONNECTION END (CONNECTION LIMIT) ===")
 		http.Error(w, "Too many connections", http.StatusTooManyRequests)
 		return
 	}
-	log.Printf("SUCCESS: Connection added to manager")
+	logger.System().Info("SUCCESS: Connection added to manager")
 
 	// Set SSE headers
-	log.Printf("INFO: Setting SSE headers...")
+	logger.System().Info("INFO: Setting SSE headers...")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("X-Session-ID", sessionID)
-	log.Printf("SUCCESS: SSE headers set")
+	logger.System().Info("SUCCESS: SSE headers set")
 
 	// Send required "endpoint" event for Remote MCP protocol
-	log.Printf("INFO: Sending endpoint event...")
+	logger.System().Info("INFO: Sending endpoint event...")
 	if _, err := fmt.Fprintf(w, "event: endpoint\n"); err != nil {
-		log.Printf("ERROR: Failed to write SSE endpoint event: %v", err)
-		log.Printf("=== SSE CONNECTION END (ENDPOINT EVENT FAILED) ===")
+		logger.System().Error(" Failed to write SSE endpoint event: %v", err)
+		logger.System().Info("=== SSE CONNECTION END (ENDPOINT EVENT FAILED) ===")
 		s.connectionManager.RemoveConnection(sessionID)
 		return
 	}
 
 	// Construct the session endpoint URL that Claude will use for sending messages
-	log.Printf("INFO: Constructing session endpoint URL...")
+	logger.System().Info("INFO: Constructing session endpoint URL...")
 	scheme := "https"
 	if r.Header.Get("X-Forwarded-Proto") == "" {
 		scheme = "http"
@@ -632,7 +632,7 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 		// Path-based routing: http://localhost:8080/memory/sessions/abc123
 		sessionEndpoint = fmt.Sprintf("%s://%s/%s/sessions/%s", scheme, host, mcpServer.Name, sessionID)
 	}
-	log.Printf("INFO: Session endpoint URL: %s", sessionEndpoint)
+	logger.System().Info("INFO: Session endpoint URL: %s", sessionEndpoint)
 
 	endpointData := map[string]interface{}{
 		"uri": sessionEndpoint,
@@ -640,20 +640,20 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 
 	endpointJSON, err := json.Marshal(endpointData)
 	if err != nil {
-		log.Printf("ERROR: Failed to marshal endpoint data: %v", err)
-		log.Printf("=== SSE CONNECTION END (ENDPOINT JSON FAILED) ===")
+		logger.System().Error(" Failed to marshal endpoint data: %v", err)
+		logger.System().Info("=== SSE CONNECTION END (ENDPOINT JSON FAILED) ===")
 		s.connectionManager.RemoveConnection(sessionID)
 		return
 	}
 
-	log.Printf("INFO: Endpoint data: %s", string(endpointJSON))
+	logger.System().Info("INFO: Endpoint data: %s", string(endpointJSON))
 	if _, err := fmt.Fprintf(w, "data: %s\n\n", string(endpointJSON)); err != nil {
-		log.Printf("ERROR: Failed to write SSE endpoint data: %v", err)
-		log.Printf("=== SSE CONNECTION END (ENDPOINT DATA FAILED) ===")
+		logger.System().Error(" Failed to write SSE endpoint data: %v", err)
+		logger.System().Info("=== SSE CONNECTION END (ENDPOINT DATA FAILED) ===")
 		s.connectionManager.RemoveConnection(sessionID)
 		return
 	}
-	log.Printf("SUCCESS: Endpoint event sent successfully")
+	logger.System().Info("SUCCESS: Endpoint event sent successfully")
 
 	// Flush to send the event immediately
 	if flusher, ok := w.(http.Flusher); ok {
@@ -664,14 +664,14 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	defer func() {
 		s.connectionManager.RemoveConnection(sessionID)
 		s.translator.RemoveConnection(sessionID)
-		log.Printf("INFO: SSE connection cleanup completed for server %s, session %s", mcpServer.Name, sessionID)
+		logger.System().Info("INFO: SSE connection cleanup completed for server %s, session %s", mcpServer.Name, sessionID)
 	}()
 
 	// Create a ticker for periodic checks and timeouts
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	log.Printf("INFO: Starting SSE message loop for server %s, session %s", mcpServer.Name, sessionID)
+	logger.System().Info("INFO: Starting SSE message loop for server %s, session %s", mcpServer.Name, sessionID)
 
 	// Add keep-alive ticker to detect client disconnection
 	keepAliveTicker := time.NewTicker(30 * time.Second)
@@ -686,12 +686,12 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("INFO: SSE context cancelled for server %s, session %s", mcpServer.Name, sessionID)
+			logger.System().Info("INFO: SSE context cancelled for server %s, session %s", mcpServer.Name, sessionID)
 			return
 		case <-keepAliveTicker.C:
 			// Send keep-alive event to detect client disconnection
 			if _, err := fmt.Fprintf(w, "event: keep-alive\ndata: {\"timestamp\":%d}\n\n", time.Now().Unix()); err != nil {
-				log.Printf("INFO: Client disconnected for session %s (server %s): %v", sessionID, mcpServer.Name, err)
+				logger.System().Info("INFO: Client disconnected for session %s (server %s): %v", sessionID, mcpServer.Name, err)
 				return
 			}
 			if flusher, ok := w.(http.Flusher); ok {
@@ -732,18 +732,18 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 
 			// STALE CONNECTION DETECTION: Check if connection has been idle too long
 			if time.Since(lastActivityTime) > staleConnectionTimeout {
-				log.Printf("WARNING: Stale SSE connection detected for server %s, session %s (idle for %v)",
+				logger.System().Warn(" Stale SSE connection detected for server %s, session %s (idle for %v)",
 					mcpServer.Name, sessionID, time.Since(lastActivityTime))
-				log.Printf("INFO: Automatically closing stale connection to prevent resource leaks")
+				logger.System().Info("INFO: Automatically closing stale connection to prevent resource leaks")
 				return
 			}
 
 			// REDUCE DEBUG SPAM: Only log first few debug messages to prevent log flooding
 			if debugMessageCount < maxDebugMessages {
-				log.Printf("DEBUG: SSE connection active for server %s, session %s - waiting for requests", mcpServer.Name, sessionID)
+				logger.System().Debug(" SSE connection active for server %s, session %s - waiting for requests", mcpServer.Name, sessionID)
 				debugMessageCount++
 				if debugMessageCount == maxDebugMessages {
-					log.Printf("INFO: Debug message limit reached for session %s - silencing further debug logs", sessionID)
+					logger.System().Info("INFO: Debug message limit reached for session %s - silencing further debug logs", sessionID)
 				}
 			}
 
@@ -755,36 +755,36 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 
 // handleMCPMessage handles POST requests with MCP messages
 func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpServer *mcp.Server) {
-	log.Printf("=== MCP MESSAGE START ===")
-	log.Printf("INFO: Processing POST message for server: %s", mcpServer.Name)
+	logger.System().Info("=== MCP MESSAGE START ===")
+	logger.System().Info("INFO: Processing POST message for server: %s", mcpServer.Name)
 
 	// Read the request body
-	log.Printf("INFO: Reading request body...")
+	logger.System().Info("INFO: Reading request body...")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("ERROR: Failed to read request body: %v", err)
-		log.Printf("=== MCP MESSAGE END (BODY READ FAILED) ===")
+		logger.System().Error(" Failed to read request body: %v", err)
+		logger.System().Info("=== MCP MESSAGE END (BODY READ FAILED) ===")
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	log.Printf("SUCCESS: Request body read (%d bytes)", len(body))
-	log.Printf("INFO: Request body: %s", string(body))
+	logger.System().Info("SUCCESS: Request body read (%d bytes)", len(body))
+	logger.System().Info("INFO: Request body: %s", string(body))
 
 	// Parse the JSON-RPC message to check if it's a handshake message
-	log.Printf("INFO: Parsing JSON-RPC message...")
+	logger.System().Info("INFO: Parsing JSON-RPC message...")
 	var jsonrpcMsg protocol.JSONRPCMessage
 	if err := json.Unmarshal(body, &jsonrpcMsg); err != nil {
-		log.Printf("ERROR: Invalid JSON-RPC message: %v", err)
-		log.Printf("=== MCP MESSAGE END (JSON PARSE FAILED) ===")
+		logger.System().Error(" Invalid JSON-RPC message: %v", err)
+		logger.System().Info("=== MCP MESSAGE END (JSON PARSE FAILED) ===")
 		http.Error(w, fmt.Sprintf("Invalid JSON-RPC message: %v", err), http.StatusBadRequest)
 		return
 	}
-	log.Printf("SUCCESS: JSON-RPC message parsed")
-	log.Printf("INFO: Method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
+	logger.System().Info("SUCCESS: JSON-RPC message parsed")
+	logger.System().Info("INFO: Method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
 
 	// Generate or get session ID
 	sessionID := s.getSessionID(r)
-	log.Printf("INFO: Session ID: %s", sessionID)
+	logger.System().Info("INFO: Session ID: %s", sessionID)
 
 	// CRITICAL FIX: Only handle handshake messages if this is NOT a session endpoint request
 	//
@@ -795,25 +795,25 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 	// Check if this request is coming to a session endpoint by looking at the URL path
 	isSessionEndpointRequest := strings.Contains(r.URL.Path, "/sessions/")
 
-	log.Printf("INFO: Checking request type - URL: %s, IsSessionEndpoint: %v", r.URL.Path, isSessionEndpointRequest)
+	logger.System().Info("INFO: Checking request type - URL: %s, IsSessionEndpoint: %v", r.URL.Path, isSessionEndpointRequest)
 
 	if isSessionEndpointRequest {
-		log.Printf("ERROR: Session endpoint request incorrectly routed to handleMCPMessage")
-		log.Printf("ERROR: This should not happen - check routing configuration")
-		log.Printf("=== MCP MESSAGE END (ROUTING ERROR) ===")
+		logger.System().Error(" Session endpoint request incorrectly routed to handleMCPMessage")
+		logger.System().Error(" This should not happen - check routing configuration")
+		logger.System().Info("=== MCP MESSAGE END (ROUTING ERROR) ===")
 		http.Error(w, "Internal routing error", http.StatusInternalServerError)
 		return
 	}
 
 	// Handle handshake messages for direct SSE endpoint requests only
-	log.Printf("INFO: Checking if handshake message...")
+	logger.System().Info("INFO: Checking if handshake message...")
 	if s.translator.IsHandshakeMessage(jsonrpcMsg.Method) {
-		log.Printf("INFO: Processing handshake message: %s", jsonrpcMsg.Method)
+		logger.System().Info("INFO: Processing handshake message: %s", jsonrpcMsg.Method)
 		s.handleHandshakeMessage(w, r, sessionID, &jsonrpcMsg, mcpServer)
-		log.Printf("=== MCP MESSAGE END (HANDSHAKE) ===")
+		logger.System().Info("=== MCP MESSAGE END (HANDSHAKE) ===")
 		return
 	}
-	log.Printf("INFO: Not a handshake message, continuing with regular processing")
+	logger.System().Info("INFO: Not a handshake message, continuing with regular processing")
 
 	// PROTOCOL ADAPTATION FIX: Handle Claude.ai's behavior of sending all requests to /sse
 	//
@@ -826,7 +826,7 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 
 	// Check if connection is initialized
 	if !s.translator.IsInitialized(sessionID) {
-		log.Printf("ERROR: Session %s not initialized for non-handshake method %s", sessionID, jsonrpcMsg.Method)
+		logger.System().Error(" Session %s not initialized for non-handshake method %s", sessionID, jsonrpcMsg.Method)
 		s.sendErrorResponse(w, jsonrpcMsg.ID, protocol.InvalidRequest, "Connection not initialized", false)
 		return
 	}
@@ -838,13 +838,13 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 	// like the session endpoint would, rather than the old asynchronous approach.
 	//
 	// This ensures Claude.ai gets immediate responses for tool discovery and calls.
-	log.Printf("INFO: Session %s is initialized, handling non-handshake request %s synchronously",
+	logger.System().Info("INFO: Session %s is initialized, handling non-handshake request %s synchronously",
 		sessionID, jsonrpcMsg.Method)
 
 	// Track the request for potential fallback handling
 	if jsonrpcMsg.Method != "" && jsonrpcMsg.ID != nil {
 		s.translator.TrackRequest(sessionID, jsonrpcMsg.ID, jsonrpcMsg.Method)
-		log.Printf("DEBUG: Tracking request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
+		logger.System().Debug(" Tracking request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
 	}
 
 	// Send request and receive response from MCP server using serialized queue
@@ -853,29 +853,29 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 
 	responseBytes, err := mcpServer.SendAndReceive(ctx, body)
 	if err != nil {
-		log.Printf("WARNING: Failed to read response from MCP server %s for method %s: %v",
+		logger.System().Warn(" Failed to read response from MCP server %s for method %s: %v",
 			mcpServer.Name, jsonrpcMsg.Method, err)
 
 		// Check if we should provide a fallback response for this method
 		if s.translator.ShouldProvideFallback(jsonrpcMsg.Method) {
-			log.Printf("INFO: Providing fallback response for method %s", jsonrpcMsg.Method)
+			logger.System().Info("INFO: Providing fallback response for method %s", jsonrpcMsg.Method)
 			fallbackResponse, fallbackErr := s.translator.CreateFallbackResponse(jsonrpcMsg.ID, jsonrpcMsg.Method)
 			if fallbackErr == nil {
 				responseBytes = fallbackResponse
 			} else {
-				log.Printf("ERROR: Failed to create fallback response: %v", fallbackErr)
+				logger.System().Error(" Failed to create fallback response: %v", fallbackErr)
 				http.Error(w, "Failed to receive response from MCP server", http.StatusInternalServerError)
 				return
 			}
 		} else {
 			// For non-fallback methods, create a proper error response
-			log.Printf("INFO: Creating error response for unsupported method %s", jsonrpcMsg.Method)
+			logger.System().Info("INFO: Creating error response for unsupported method %s", jsonrpcMsg.Method)
 			errorResponse, errorErr := s.translator.CreateErrorResponse(jsonrpcMsg.ID,
 				protocol.MethodNotFound, fmt.Sprintf("Method %s not supported", jsonrpcMsg.Method), false)
 			if errorErr == nil {
 				responseBytes = errorResponse
 			} else {
-				log.Printf("ERROR: Failed to create error response: %v", errorErr)
+				logger.System().Error(" Failed to create error response: %v", errorErr)
 				http.Error(w, "Failed to receive response from MCP server", http.StatusInternalServerError)
 				return
 			}
@@ -888,9 +888,9 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(responseBytes); err != nil {
-		log.Printf("ERROR: Failed to write synchronous response: %v", err)
+		logger.System().Error(" Failed to write synchronous response: %v", err)
 	} else {
-		log.Printf("INFO: Successfully returned synchronous response for %s to session %s via /sse endpoint",
+		logger.System().Info("INFO: Successfully returned synchronous response for %s to session %s via /sse endpoint",
 			jsonrpcMsg.Method, sessionID)
 	}
 }
@@ -928,13 +928,13 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 
 // logRequest logs HTTP requests for debugging
 func (s *Server) logRequest(r *http.Request) {
-	log.Printf("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+	logger.System().Info("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
 
 	// Log headers for debugging Remote MCP protocol
 	for name, values := range r.Header {
 		if strings.HasPrefix(strings.ToLower(name), "x-") ||
 			strings.Contains(strings.ToLower(name), "mcp") {
-			log.Printf("Header %s: %v", name, values)
+			logger.System().Info("Header %s: %v", name, values)
 		}
 	}
 }
@@ -943,26 +943,26 @@ func (s *Server) logRequest(r *http.Request) {
 func (s *Server) getSessionID(r *http.Request) string {
 	// Try to get session ID from Remote MCP standard header
 	if sessionID := r.Header.Get("Mcp-Session-Id"); sessionID != "" {
-		log.Printf("DEBUG: Using existing session ID from Mcp-Session-Id header: %s", sessionID)
+		logger.System().Debug(" Using existing session ID from Mcp-Session-Id header: %s", sessionID)
 		return sessionID
 	}
 
 	// Try to get session ID from legacy header for backward compatibility
 	if sessionID := r.Header.Get("X-Session-ID"); sessionID != "" {
-		log.Printf("DEBUG: Using existing session ID from X-Session-ID header: %s", sessionID)
+		logger.System().Debug(" Using existing session ID from X-Session-ID header: %s", sessionID)
 		return sessionID
 	}
 
 	// Generate a new session ID
 	bytes := make([]byte, 16)
 	if _, err := rand.Read(bytes); err != nil {
-		log.Printf("ERROR: Failed to generate random session ID: %v", err)
+		logger.System().Error(" Failed to generate random session ID: %v", err)
 		// Fallback to a simple timestamp-based ID
 		return fmt.Sprintf("session-%d", time.Now().UnixNano())
 	}
 
 	sessionID := hex.EncodeToString(bytes)
-	log.Printf("INFO: Generated new session ID: %s", sessionID)
+	logger.System().Info("INFO: Generated new session ID: %s", sessionID)
 	return sessionID
 }
 
@@ -992,7 +992,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 
 	// Check if server is running
 	if !mcpServer.IsRunning() {
-		log.Printf("ERROR: MCP server '%s' is not running for initialize", mcpServer.Name)
+		logger.System().Error(" MCP server '%s' is not running for initialize", mcpServer.Name)
 		s.sendErrorResponse(w, msg.ID, protocol.InvalidRequest, fmt.Sprintf("MCP server '%s' is not running", mcpServer.Name), false)
 		return
 	}
@@ -1000,7 +1000,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 	// Forward the initialize request to the actual MCP server
 	initRequestBytes, err := json.Marshal(msg)
 	if err != nil {
-		log.Printf("ERROR: Failed to marshal initialize request: %v", err)
+		logger.System().Error(" Failed to marshal initialize request: %v", err)
 		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to process initialize request", false)
 		return
 	}
@@ -1017,31 +1017,31 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 	//
 	// The serialized request queue prevents stdio deadlocks and response mismatching that
 	// occur when multiple concurrent requests try to access the same MCP server simultaneously.
-	log.Printf("INFO: Waiting for initialize response from MCP server %s...", mcpServer.Name)
+	logger.System().Info("INFO: Waiting for initialize response from MCP server %s...", mcpServer.Name)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	// Send initialize request and receive response using serialized queue
 	responseBytes, err := mcpServer.SendAndReceive(ctx, initRequestBytes)
 	if err != nil {
-		log.Printf("ERROR: Failed to send/receive initialize request to MCP server %s: %v", mcpServer.Name, err)
+		logger.System().Error(" Failed to send/receive initialize request to MCP server %s: %v", mcpServer.Name, err)
 
 		// CRITICAL FIX: Attempt server restart on initialize timeout
 		if strings.Contains(err.Error(), "context deadline exceeded") {
-			log.Printf("WARNING: MCP server %s appears hung, attempting restart...", mcpServer.Name)
+			logger.System().Warn(" MCP server %s appears hung, attempting restart...", mcpServer.Name)
 			if restartErr := s.mcpManager.RestartServer(mcpServer.Name); restartErr != nil {
-				log.Printf("ERROR: Failed to restart MCP server %s: %v", mcpServer.Name, restartErr)
+				logger.System().Error(" Failed to restart MCP server %s: %v", mcpServer.Name, restartErr)
 			} else {
-				log.Printf("INFO: Successfully restarted MCP server %s", mcpServer.Name)
+				logger.System().Info("INFO: Successfully restarted MCP server %s", mcpServer.Name)
 				// Retry initialize with new server instance
 				retryCtx, retryCancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer retryCancel()
 				if retryBytes, retryErr := mcpServer.SendAndReceive(retryCtx, initRequestBytes); retryErr == nil {
-					log.Printf("INFO: Initialize retry succeeded for server %s after restart", mcpServer.Name)
+					logger.System().Info("INFO: Initialize retry succeeded for server %s after restart", mcpServer.Name)
 					responseBytes = retryBytes
 					err = nil
 				} else {
-					log.Printf("ERROR: Initialize retry failed for server %s: %v", mcpServer.Name, retryErr)
+					logger.System().Error(" Initialize retry failed for server %s: %v", mcpServer.Name, retryErr)
 				}
 			}
 		}
@@ -1055,7 +1055,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 	// Parse the MCP server's initialize response
 	var mcpResponse protocol.JSONRPCMessage
 	if err := json.Unmarshal(responseBytes, &mcpResponse); err != nil {
-		log.Printf("ERROR: Failed to parse initialize response from MCP server %s: %v", mcpServer.Name, err)
+		logger.System().Error(" Failed to parse initialize response from MCP server %s: %v", mcpServer.Name, err)
 		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Invalid response from MCP server", false)
 		return
 	}
@@ -1064,7 +1064,7 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 	if mcpResponse.Result != nil {
 		_, err := s.translator.HandleInitialize(sessionID, params)
 		if err != nil {
-			log.Printf("ERROR: Failed to store connection state: %v", err)
+			logger.System().Error(" Failed to store connection state: %v", err)
 		} else {
 			// CRITICAL FIX: Mark session as initialized immediately after successful initialize response
 			//
@@ -1079,9 +1079,9 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 			// DO NOT REMOVE OR MODIFY THIS SECTION WITHOUT ENSURING ALTERNATIVE INITIALIZATION MECHANISM
 			err := s.translator.HandleInitialized(sessionID)
 			if err != nil {
-				log.Printf("ERROR: Failed to mark session as initialized: %v", err)
+				logger.System().Error(" Failed to mark session as initialized: %v", err)
 			} else {
-				log.Printf("INFO: Session %s marked as initialized for server %s", sessionID, mcpServer.Name)
+				logger.System().Info("INFO: Session %s marked as initialized for server %s", sessionID, mcpServer.Name)
 			}
 		}
 	}
@@ -1093,9 +1093,9 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(responseBytes); err != nil {
-		log.Printf("ERROR: Failed to write initialize response: %v", err)
+		logger.System().Error(" Failed to write initialize response: %v", err)
 	} else {
-		log.Printf("INFO: Forwarded initialize response from MCP server %s for session %s", mcpServer.Name, sessionID)
+		logger.System().Info("INFO: Forwarded initialize response from MCP server %s for session %s", mcpServer.Name, sessionID)
 	}
 }
 
@@ -1110,7 +1110,7 @@ func (s *Server) handleInitialized(w http.ResponseWriter, sessionID string, msg 
 	// Send HTTP 202 Accepted for notification
 	w.WriteHeader(http.StatusAccepted)
 
-	log.Printf("Connection initialized for session %s", sessionID)
+	logger.System().Info("Connection initialized for session %s", sessionID)
 }
 
 // handleSessionMessage handles POST requests to session endpoints from Claude
@@ -1122,9 +1122,9 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		if pathServer, exists := vars["server"]; exists && pathServer != "" {
 			serverName = pathServer
-			log.Printf("DEBUG: Using server name '%s' from URL path for session", serverName)
+			logger.System().Debug(" Using server name '%s' from URL path for session", serverName)
 		} else {
-			log.Printf("ERROR: No server name found in context or URL path for host: %s, path: %s", r.Host, r.URL.Path)
+			logger.System().Error(" No server name found in context or URL path for host: %s, path: %s", r.Host, r.URL.Path)
 			http.Error(w, "Invalid request format. Expected: {server}.mcp.{domain}/sessions/{id} or /{server}/sessions/{id}", http.StatusBadRequest)
 			return
 		}
@@ -1133,12 +1133,12 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	sessionID := vars["sessionId"]
 
-	log.Printf("=== SESSION MESSAGE START ===")
-	log.Printf("INFO: Handling session message for server: %s (from subdomain), session: %s", serverName, sessionID)
-	log.Printf("INFO: Method: %s, URL: %s", r.Method, r.URL.String())
-	log.Printf("INFO: Remote Address: %s", r.RemoteAddr)
-	log.Printf("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
-	log.Printf("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
+	logger.System().Info("=== SESSION MESSAGE START ===")
+	logger.System().Info("INFO: Handling session message for server: %s (from subdomain), session: %s", serverName, sessionID)
+	logger.System().Info("INFO: Method: %s, URL: %s", r.Method, r.URL.String())
+	logger.System().Info("INFO: Remote Address: %s", r.RemoteAddr)
+	logger.System().Info("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
+	logger.System().Info("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
 
 	// Validate authentication
 	if !s.validateAuthentication(r) {
@@ -1154,28 +1154,28 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Read the request body first to check message type
-	log.Printf("INFO: Reading session message body...")
+	logger.System().Info("INFO: Reading session message body...")
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Printf("ERROR: Failed to read session message body: %v", err)
-		log.Printf("=== SESSION MESSAGE END (BODY READ FAILED) ===")
+		logger.System().Error(" Failed to read session message body: %v", err)
+		logger.System().Info("=== SESSION MESSAGE END (BODY READ FAILED) ===")
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
 	}
-	log.Printf("SUCCESS: Session message body read (%d bytes)", len(body))
-	log.Printf("INFO: Session message body: %s", string(body))
+	logger.System().Info("SUCCESS: Session message body read (%d bytes)", len(body))
+	logger.System().Info("INFO: Session message body: %s", string(body))
 
 	// Parse the JSON-RPC message
-	log.Printf("INFO: Parsing session message JSON-RPC...")
+	logger.System().Info("INFO: Parsing session message JSON-RPC...")
 	var jsonrpcMsg protocol.JSONRPCMessage
 	if err := json.Unmarshal(body, &jsonrpcMsg); err != nil {
-		log.Printf("ERROR: Invalid session message JSON-RPC: %v", err)
-		log.Printf("=== SESSION MESSAGE END (JSON PARSE FAILED) ===")
+		logger.System().Error(" Invalid session message JSON-RPC: %v", err)
+		logger.System().Info("=== SESSION MESSAGE END (JSON PARSE FAILED) ===")
 		http.Error(w, fmt.Sprintf("Invalid JSON-RPC message: %v", err), http.StatusBadRequest)
 		return
 	}
-	log.Printf("SUCCESS: Session message JSON-RPC parsed")
-	log.Printf("INFO: Session message method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
+	logger.System().Info("SUCCESS: Session message JSON-RPC parsed")
+	logger.System().Info("INFO: Session message method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
 
 	// CRITICAL FIX: Allow handshake messages on uninitialized sessions
 	//
@@ -1187,11 +1187,11 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	isHandshake := s.translator.IsHandshakeMessage(jsonrpcMsg.Method)
 	isInitialized := s.translator.IsInitialized(sessionID)
 
-	log.Printf("DEBUG: Session %s - Method: %s, IsHandshake: %v, IsInitialized: %v",
+	logger.System().Debug(" Session %s - Method: %s, IsHandshake: %v, IsInitialized: %v",
 		sessionID, jsonrpcMsg.Method, isHandshake, isInitialized)
 
 	if !isHandshake && !isInitialized {
-		log.Printf("ERROR: Session %s not initialized for non-handshake method %s", sessionID, jsonrpcMsg.Method)
+		logger.System().Error(" Session %s not initialized for non-handshake method %s", sessionID, jsonrpcMsg.Method)
 		http.Error(w, "Session not initialized", http.StatusBadRequest)
 		return
 	}
@@ -1199,7 +1199,7 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	// Track the request for potential fallback handling
 	if jsonrpcMsg.Method != "" && jsonrpcMsg.ID != nil {
 		s.translator.TrackRequest(sessionID, jsonrpcMsg.ID, jsonrpcMsg.Method)
-		log.Printf("DEBUG: Tracking session request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
+		logger.System().Debug(" Tracking session request ID %v, method %s for session %s", jsonrpcMsg.ID, jsonrpcMsg.Method, sessionID)
 	}
 
 	// CRITICAL ARCHITECTURAL FIX: Handle ALL session endpoint requests synchronously
@@ -1217,7 +1217,7 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	//
 	// This is more aligned with how most Remote MCP implementations work.
 
-	log.Printf("INFO: Handling session request %s synchronously", jsonrpcMsg.Method)
+	logger.System().Info("INFO: Handling session request %s synchronously", jsonrpcMsg.Method)
 
 	// Send request and receive response from MCP server using serialized queue
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -1225,7 +1225,7 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 
 	responseBytes, err := mcpServer.SendAndReceive(ctx, body)
 	if err != nil {
-		log.Printf("ERROR: Failed to send/receive message to MCP server %s: %v", serverName, err)
+		logger.System().Error(" Failed to send/receive message to MCP server %s: %v", serverName, err)
 		http.Error(w, "Failed to communicate with MCP server", http.StatusInternalServerError)
 		return
 	}
@@ -1239,9 +1239,9 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 			if jsonrpcMsg.Method == "initialize" {
 				err := s.translator.HandleInitialized(sessionID)
 				if err != nil {
-					log.Printf("ERROR: Failed to mark session as initialized: %v", err)
+					logger.System().Error(" Failed to mark session as initialized: %v", err)
 				} else {
-					log.Printf("INFO: Session %s marked as initialized for server %s", sessionID, serverName)
+					logger.System().Info("INFO: Session %s marked as initialized for server %s", sessionID, serverName)
 				}
 			}
 		}
@@ -1253,19 +1253,19 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(responseBytes); err != nil {
-		log.Printf("ERROR: Failed to write session response: %v", err)
+		logger.System().Error(" Failed to write session response: %v", err)
 	} else {
-		log.Printf("INFO: Successfully returned synchronous response for %s to session %s", jsonrpcMsg.Method, sessionID)
+		logger.System().Info("INFO: Successfully returned synchronous response for %s to session %s", jsonrpcMsg.Method, sessionID)
 	}
 }
 
 // sendErrorResponse sends a JSON-RPC error response
 func (s *Server) sendErrorResponse(w http.ResponseWriter, id interface{}, code int, message string, isRemoteMCP bool) {
-	log.Printf("ERROR: Sending error response - Code: %d, Message: %s", code, message)
+	logger.System().Error(" Sending error response - Code: %d, Message: %s", code, message)
 
 	errorResponse, err := s.translator.CreateErrorResponse(id, code, message, isRemoteMCP)
 	if err != nil {
-		log.Printf("ERROR: Failed to create error response: %v", err)
+		logger.System().Error(" Failed to create error response: %v", err)
 		http.Error(w, "Failed to create error response", http.StatusInternalServerError)
 		return
 	}
@@ -1274,9 +1274,9 @@ func (s *Server) sendErrorResponse(w http.ResponseWriter, id interface{}, code i
 	w.WriteHeader(http.StatusOK)
 
 	if _, err := w.Write(errorResponse); err != nil {
-		log.Printf("ERROR: Failed to write error response: %v", err)
+		logger.System().Error(" Failed to write error response: %v", err)
 	} else {
-		log.Printf("DEBUG: Error response sent successfully")
+		logger.System().Debug(" Error response sent successfully")
 	}
 }
 
@@ -1285,25 +1285,25 @@ func (s *Server) validateAuthentication(r *http.Request) bool {
 	// Check for Authorization header
 	authHeader := r.Header.Get("Authorization")
 	if authHeader == "" {
-		log.Printf("ERROR: No authorization header found, authentication required")
+		logger.System().Error(" No authorization header found, authentication required")
 		return false
 	}
 
 	// Parse Bearer token
 	if !strings.HasPrefix(authHeader, "Bearer ") {
-		log.Printf("ERROR: Invalid authorization header format, expected Bearer token")
+		logger.System().Error(" Invalid authorization header format, expected Bearer token")
 		return false
 	}
 
 	token := strings.TrimPrefix(authHeader, "Bearer ")
 	if token == "" {
-		log.Printf("ERROR: Empty bearer token")
+		logger.System().Error(" Empty bearer token")
 		return false
 	}
 
 	// Simple token validation - accept any non-empty token for Claude.ai compatibility
 	// For Claude.ai Remote MCP, any Bearer token should work
-	log.Printf("INFO: Authentication successful with token: %s...", func() string {
+	logger.System().Info("INFO: Authentication successful with token: %s...", func() string {
 		if len(token) > 10 {
 			return token[:10]
 		}
@@ -1333,7 +1333,7 @@ func (s *Server) validateOrigin(r *http.Request) bool {
 		}
 	}
 
-	log.Printf("Origin not allowed: %s", origin)
+	logger.System().Info("Origin not allowed: %s", origin)
 	return false
 }
 
@@ -1395,7 +1395,7 @@ func (s *Server) handleClientRegistration(w http.ResponseWriter, r *http.Request
 		"scope": "mcp",
 	}
 
-	log.Printf("INFO: OAuth client registered - ID: %s", clientID)
+	logger.System().Info("INFO: OAuth client registered - ID: %s", clientID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -1417,7 +1417,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	// Generate authorization code
 	authCode := generateRandomString(32)
 
-	log.Printf("INFO: OAuth authorization request - Client: %s, Redirect: %s", clientID, redirectURI)
+	logger.System().Info("INFO: OAuth authorization request - Client: %s, Redirect: %s", clientID, redirectURI)
 
 	// Redirect with authorization code
 	callbackURL := fmt.Sprintf("%s?code=%s", redirectURI, authCode)
@@ -1459,7 +1459,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		"scope":        "mcp",
 	}
 
-	log.Printf("INFO: OAuth token issued - Client: %s, Token: %s...", clientID, accessToken[:10])
+	logger.System().Info("INFO: OAuth token issued - Client: %s, Token: %s...", clientID, accessToken[:10])
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tokenResponse)
