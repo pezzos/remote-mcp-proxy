@@ -45,6 +45,8 @@
       "Bash(tail:*)",
       "Bash(timeout:*)",
       "Bash(wc:*)",
+      "mcp__docker-mcp__create-container",
+      "mcp__docker-mcp__deploy-compose",
       "mcp__docker-mcp__get-logs",
       "mcp__docker-mcp__list-containers",
       "WebFetch(domain:docs.anthropic.com)",
