@@ -1025,8 +1025,31 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 	responseBytes, err := mcpServer.SendAndReceive(ctx, initRequestBytes)
 	if err != nil {
 		log.Printf("ERROR: Failed to send/receive initialize request to MCP server %s: %v", mcpServer.Name, err)
-		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to communicate with MCP server", false)
-		return
+
+		// CRITICAL FIX: Attempt server restart on initialize timeout
+		if strings.Contains(err.Error(), "context deadline exceeded") {
+			log.Printf("WARNING: MCP server %s appears hung, attempting restart...", mcpServer.Name)
+			if restartErr := s.mcpManager.RestartServer(mcpServer.Name); restartErr != nil {
+				log.Printf("ERROR: Failed to restart MCP server %s: %v", mcpServer.Name, restartErr)
+			} else {
+				log.Printf("INFO: Successfully restarted MCP server %s", mcpServer.Name)
+				// Retry initialize with new server instance
+				retryCtx, retryCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer retryCancel()
+				if retryBytes, retryErr := mcpServer.SendAndReceive(retryCtx, initRequestBytes); retryErr == nil {
+					log.Printf("INFO: Initialize retry succeeded for server %s after restart", mcpServer.Name)
+					responseBytes = retryBytes
+					err = nil
+				} else {
+					log.Printf("ERROR: Initialize retry failed for server %s: %v", mcpServer.Name, retryErr)
+				}
+			}
+		}
+
+		if err != nil {
+			s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to communicate with MCP server", false)
+			return
+		}
 	}
 
 	// Parse the MCP server's initialize response

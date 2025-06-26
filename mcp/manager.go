@@ -644,3 +644,24 @@ func (s *Server) monitor() {
 		return
 	}
 }
+
+
+// RestartServer restarts a specific MCP server by name
+func (m *Manager) RestartServer(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	server, exists := m.servers[name]
+	if !exists {
+		return fmt.Errorf("server %s not found", name)
+	}
+
+	log.Printf("INFO: Stopping MCP server %s for restart", name)
+	server.Stop()
+
+	// Wait a moment for clean shutdown
+	time.Sleep(500 * time.Millisecond)
+
+	log.Printf("INFO: Restarting MCP server %s", name)
+	return m.startServer(name, server.Config)
+}
