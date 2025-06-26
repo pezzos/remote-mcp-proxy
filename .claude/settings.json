@@ -42,6 +42,7 @@
       "Bash(nslookup:*)",
       "Bash(rg:*)",
       "Bash(rm:*)",
+      "Bash(sed:*)",
       "Bash(tail:*)",
       "Bash(timeout:*)",
       "Bash(wc:*)",
