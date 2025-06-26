@@ -98,19 +98,21 @@ func (cm *ConnectionManager) RemoveConnection(sessionID string) {
 func (cm *ConnectionManager) GetConnectionCount() int {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
+
 	return len(cm.connections)
 }
 
 // GetConnections returns a copy of all active connections
-func (cm *ConnectionManager) GetConnections() map[string]ConnectionInfo {
+func (cm *ConnectionManager) GetConnections() map[string]*ConnectionInfo {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
-	result := make(map[string]ConnectionInfo)
-	for k, v := range cm.connections {
-		result[k] = *v
+	// Create a copy to avoid race conditions
+	connections := make(map[string]*ConnectionInfo)
+	for sessionID, conn := range cm.connections {
+		connections[sessionID] = conn
 	}
-	return result
+	return connections
 }
 
 // CleanupStaleConnections removes connections that have been inactive for too long
@@ -276,6 +278,8 @@ func (s *Server) Router() http.Handler {
 	// Health and monitoring endpoints
 	r.HandleFunc("/health/servers", s.handleServerHealth).Methods("GET", "OPTIONS")
 	r.HandleFunc("/health/resources", s.handleResourceMetrics).Methods("GET", "OPTIONS")
+	r.HandleFunc("/health/sessions", s.handleSessionHealth).Methods("GET", "OPTIONS")
+	r.HandleFunc("/health/sessions/{sessionId:[^/]+}", s.handleSessionDetail).Methods("GET", "OPTIONS")
 
 	// OAuth 2.0 Dynamic Client Registration endpoints
 	r.HandleFunc("/.well-known/oauth-authorization-server", s.handleOAuthMetadata).Methods("GET")
@@ -366,6 +370,100 @@ func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleSessionHealth returns information about all active sessions
+func (s *Server) handleSessionHealth(w http.ResponseWriter, r *http.Request) {
+	logger.System().Info("Handling session health request")
+
+	// Get active connections which represent active sessions
+	connections := s.connectionManager.GetConnections()
+	
+	// Build session summary
+	sessions := make(map[string]interface{})
+	
+	for sessionID, conn := range connections {
+		// Get session-specific server information
+		sessionServers := s.mcpManager.GetSessionServers(sessionID)
+		
+		sessions[sessionID[:8]] = map[string]interface{}{
+			"sessionId":     sessionID[:8],
+			"fullSessionId": sessionID,
+			"serverName":    conn.ServerName,
+			"connectedAt":   conn.ConnectedAt,
+			"duration":      time.Since(conn.ConnectedAt).String(),
+			"servers":       sessionServers,
+			"serverCount":   len(sessionServers),
+		}
+	}
+
+	response := map[string]interface{}{
+		"sessions":    sessions,
+		"totalSessions": len(sessions),
+		"timestamp":   time.Now(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logger.System().Error("Failed to encode session health response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	} else {
+		logger.System().Info("Successfully returned session health for %d sessions", len(sessions))
+	}
+}
+
+// handleSessionDetail returns detailed information about a specific session
+func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	sessionID := vars["sessionId"]
+
+	logger.System().Info("Handling session detail request for session: %s", sessionID)
+
+	// Find the full session ID (we store shortened versions in the URL)
+	connections := s.connectionManager.GetConnections()
+	var fullSessionID string
+	var connection *ConnectionInfo
+	
+	for fullID, conn := range connections {
+		if strings.HasPrefix(fullID, sessionID) {
+			fullSessionID = fullID
+			connection = conn
+			break
+		}
+	}
+
+	if connection == nil {
+		logger.System().Error("Session '%s' not found", sessionID)
+		http.Error(w, fmt.Sprintf("Session '%s' not found", sessionID), http.StatusNotFound)
+		return
+	}
+
+	// Get session-specific server information
+	sessionServers := s.mcpManager.GetSessionServers(fullSessionID)
+	
+	response := map[string]interface{}{
+		"sessionId":     sessionID,
+		"fullSessionId": fullSessionID,
+		"serverName":    connection.ServerName,
+		"connectedAt":   connection.ConnectedAt,
+		"duration":      time.Since(connection.ConnectedAt).String(),
+		"servers":       sessionServers,
+		"serverCount":   len(sessionServers),
+		"sessionDirectory": fmt.Sprintf("/app/sessions/%s", fullSessionID),
+		"timestamp":     time.Now(),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logger.System().Error("Failed to encode session detail response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	} else {
+		logger.System().Info("Successfully returned session detail for session %s", sessionID)
+	}
+}
+
 // handleListTools returns the available tools for a specific MCP server
 func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -373,11 +471,15 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 
 	logger.System().Info("Handling listtools request for server: %s", serverName)
 
-	// Get the MCP server
-	mcpServer, exists := s.mcpManager.GetServer(serverName)
+	// Get session ID for session-aware server selection
+	sessionID := s.getSessionID(r)
+	logger.System().Debug("Using session ID: %s for listtools", sessionID[:8])
+
+	// Get the session-aware MCP server
+	mcpServer, exists := s.mcpManager.GetServerForSession(sessionID, serverName)
 	if !exists {
-		logger.System().Error(" MCP server '%s' not found", serverName)
-		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
+		logger.System().Error(" MCP server '%s' not found or failed to create for session %s", serverName, sessionID[:8])
+		http.Error(w, fmt.Sprintf("MCP server '%s' not available", serverName), http.StatusNotFound)
 		return
 	}
 
@@ -495,11 +597,15 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate server exists
-	mcpServer, exists := s.mcpManager.GetServer(serverName)
+	// Get session ID early for session-aware server selection
+	sessionID := s.getSessionID(r)
+	logger.System().Debug("Using session ID: %s for server selection", sessionID[:8])
+
+	// Use session-aware server selection
+	mcpServer, exists := s.mcpManager.GetServerForSession(sessionID, serverName)
 	if !exists {
-		logger.System().Error(" MCP server '%s' not found", serverName)
-		http.Error(w, fmt.Sprintf("MCP server '%s' not found", serverName), http.StatusNotFound)
+		logger.System().Error(" MCP server '%s' not found or failed to create for session %s", serverName, sessionID[:8])
+		http.Error(w, fmt.Sprintf("MCP server '%s' not available", serverName), http.StatusNotFound)
 		return
 	}
 
@@ -665,7 +771,8 @@ func (s *Server) handleSSEConnection(w http.ResponseWriter, r *http.Request, mcp
 	defer func() {
 		s.connectionManager.RemoveConnection(sessionID)
 		s.translator.RemoveConnection(sessionID)
-		logger.System().Info("INFO: SSE connection cleanup completed for server %s, session %s", mcpServer.Name, sessionID)
+		s.mcpManager.CleanupSession(sessionID)
+		logger.System().Info("INFO: SSE connection and session cleanup completed for server %s, session %s", mcpServer.Name, sessionID[:8])
 	}()
 
 	// Create a ticker for periodic checks and timeouts

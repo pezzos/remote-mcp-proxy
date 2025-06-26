@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -66,7 +67,9 @@ type Server struct {
 
 // Manager manages multiple MCP server processes
 type Manager struct {
-	servers map[string]*Server
+	servers map[string]*Server // Global servers (legacy mode)
+	sessionServers map[string]map[string]*Server // sessionID -> serverName -> Server
+	configs map[string]config.MCPServer // Server configurations
 	mu      sync.RWMutex
 }
 
@@ -74,9 +77,16 @@ type Manager struct {
 func NewManager(configs map[string]config.MCPServer) *Manager {
 	m := &Manager{
 		servers: make(map[string]*Server),
+		sessionServers: make(map[string]map[string]*Server),
+		configs: make(map[string]config.MCPServer),
 	}
 
-	// Initialize servers from configs
+	// Store configurations for later use
+	for name, cfg := range configs {
+		m.configs[name] = cfg
+	}
+
+	// Initialize global servers from configs (legacy mode)
 	for name, cfg := range configs {
 		// Get MCP logger for this server
 		mcpLogger, err := logger.MCP(name)
@@ -112,13 +122,252 @@ func (m *Manager) StartAll() error {
 	return nil
 }
 
-// GetServer returns a server by name
+// GetServer returns a server by name (legacy global mode)
 func (m *Manager) GetServer(name string) (*Server, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	server, exists := m.servers[name]
 	return server, exists
+}
+
+// GetServerForSession returns a session-specific server, creating it if needed
+func (m *Manager) GetServerForSession(sessionID, serverName string) (*Server, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if session exists
+	sessionMap, sessionExists := m.sessionServers[sessionID]
+	if !sessionExists {
+		// Create new session map
+		sessionMap = make(map[string]*Server)
+		m.sessionServers[sessionID] = sessionMap
+	}
+
+	// Check if server exists for this session
+	server, serverExists := sessionMap[serverName]
+	if serverExists {
+		return server, true
+	}
+
+	// Check if we have config for this server
+	cfg, configExists := m.configs[serverName]
+	if !configExists {
+		logger.System().Error("No configuration found for server %s", serverName)
+		return nil, false
+	}
+
+	// Create session-aware configuration
+	sessionCfg := m.createSessionConfig(sessionID, serverName, cfg)
+
+	// Create new server instance for this session
+	mcpLogger, err := logger.MCP(fmt.Sprintf("%s-%s", serverName, sessionID[:8]))
+	if err != nil {
+		logger.System().Error("Failed to create MCP logger for %s-%s: %v", serverName, sessionID[:8], err)
+		mcpLogger = logger.System()
+	}
+
+	server = &Server{
+		Name:         fmt.Sprintf("%s-%s", serverName, sessionID[:8]),
+		Config:       sessionCfg,
+		requestQueue: make(chan RequestResponse, 100),
+		queueStarted: false,
+		logger:       mcpLogger,
+	}
+
+	// Start the server
+	if err := m.startServerForSession(sessionID, serverName, server); err != nil {
+		logger.System().Error("Failed to start server %s for session %s: %v", serverName, sessionID, err)
+		return nil, false
+	}
+
+	// Store the server
+	sessionMap[serverName] = server
+	
+	return server, true
+}
+
+// createSessionConfig creates a session-aware configuration with template substitution
+func (m *Manager) createSessionConfig(sessionID, serverName string, baseCfg config.MCPServer) config.MCPServer {
+	// Create a copy of the base config
+	sessionCfg := config.MCPServer{
+		Command: baseCfg.Command,
+		Args:    make([]string, len(baseCfg.Args)),
+		Env:     make(map[string]string),
+	}
+	
+	// Copy and substitute args with template variables
+	for i, arg := range baseCfg.Args {
+		arg = strings.ReplaceAll(arg, "{SESSION_ID}", sessionID)
+		arg = strings.ReplaceAll(arg, "{SERVER_NAME}", serverName)
+		sessionCfg.Args[i] = arg
+	}
+	
+	// Copy and substitute environment variables
+	for key, value := range baseCfg.Env {
+		// Replace template variables
+		value = strings.ReplaceAll(value, "{SESSION_ID}", sessionID)
+		value = strings.ReplaceAll(value, "{SERVER_NAME}", serverName)
+		sessionCfg.Env[key] = value
+	}
+	
+	return sessionCfg
+}
+
+// startServerForSession starts a server for a specific session with session-aware directory setup
+func (m *Manager) startServerForSession(sessionID, serverName string, server *Server) error {
+	// Create session directory
+	sessionDir := fmt.Sprintf("/app/sessions/%s", sessionID)
+	if err := m.ensureSessionDirectory(sessionDir); err != nil {
+		return fmt.Errorf("failed to create session directory: %w", err)
+	}
+
+	logger.System().Info("Starting MCP server %s for session %s", serverName, sessionID[:8])
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	cmd := exec.CommandContext(ctx, server.Config.Command, server.Config.Args...)
+
+	// Set environment variables
+	cmd.Env = os.Environ()
+	for key, value := range server.Config.Env {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", key, value))
+	}
+
+	// Set working directory to session directory
+	cmd.Dir = sessionDir
+
+	// Set up pipes for communication
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		cancel()
+		logger.System().Error("Failed to create stdin pipe for server %s-%s: %v", serverName, sessionID[:8], err)
+		return fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		if stdin != nil {
+			stdin.Close()
+		}
+		logger.System().Error("Failed to create stdout pipe for server %s-%s: %v", serverName, sessionID[:8], err)
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	// Start the process
+	if err := cmd.Start(); err != nil {
+		cancel()
+		if stdin != nil {
+			stdin.Close()
+		}
+		if stdout != nil {
+			stdout.Close()
+		}
+		logger.System().Error("Failed to start process for server %s-%s: %v", serverName, sessionID[:8], err)
+		return fmt.Errorf("failed to start process: %w", err)
+	}
+
+	// Update the server with process information
+	server.Process = cmd
+	server.Stdin = stdin
+	server.Stdout = stdout
+	server.ctx = ctx
+	server.cancel = cancel
+
+	// Start the request processor if not already started
+	if !server.queueStarted {
+		go server.processRequests()
+		server.queueStarted = true
+	}
+
+	// Start monitoring the process
+	go server.monitor()
+
+	logger.System().Info("Successfully started MCP server %s-%s (PID: %d)", serverName, sessionID[:8], cmd.Process.Pid)
+	return nil
+}
+
+// ensureSessionDirectory creates the session directory and any necessary subdirectories
+func (m *Manager) ensureSessionDirectory(sessionDir string) error {
+	if err := os.MkdirAll(sessionDir, 0755); err != nil {
+		return err
+	}
+	
+	// Create common subdirectories that MCP servers might need
+	subdirs := []string{"data", "cache", "temp"}
+	for _, subdir := range subdirs {
+		fullPath := fmt.Sprintf("%s/%s", sessionDir, subdir)
+		if err := os.MkdirAll(fullPath, 0755); err != nil {
+			logger.System().Warn("Failed to create subdirectory %s: %v", fullPath, err)
+		}
+	}
+	
+	return nil
+}
+
+// CleanupSession stops all servers for a session and cleans up resources
+func (m *Manager) CleanupSession(sessionID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sessionMap, exists := m.sessionServers[sessionID]
+	if !exists {
+		logger.System().Debug("No servers found for session %s during cleanup", sessionID[:8])
+		return
+	}
+
+	logger.System().Info("Cleaning up session %s with %d servers", sessionID[:8], len(sessionMap))
+
+	// Stop all servers for this session
+	for serverName, server := range sessionMap {
+		logger.System().Info("Stopping server %s for session %s", serverName, sessionID[:8])
+		server.Stop()
+	}
+
+	// Remove session from tracking
+	delete(m.sessionServers, sessionID)
+
+	// Clean up session directory (optional - could be kept for persistence)
+	sessionDir := fmt.Sprintf("/app/sessions/%s", sessionID)
+	if err := os.RemoveAll(sessionDir); err != nil {
+		logger.System().Warn("Failed to clean up session directory %s: %v", sessionDir, err)
+	} else {
+		logger.System().Info("Cleaned up session directory for session %s", sessionID[:8])
+	}
+}
+
+// GetSessionServers returns information about all servers for a specific session
+func (m *Manager) GetSessionServers(sessionID string) []ServerStatus {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	sessionMap, exists := m.sessionServers[sessionID]
+	if !exists {
+		return []ServerStatus{}
+	}
+
+	var statuses []ServerStatus
+	for serverName, server := range sessionMap {
+		status := ServerStatus{
+			Name:    fmt.Sprintf("%s-%s", serverName, sessionID[:8]),
+			Command: server.Config.Command,
+			Args:    server.Config.Args,
+		}
+
+		server.mu.RLock()
+		if server.Process != nil && server.Process.Process != nil {
+			status.Running = true
+			status.PID = server.Process.Process.Pid
+		} else {
+			status.Running = false
+		}
+		server.mu.RUnlock()
+
+		statuses = append(statuses, status)
+	}
+
+	return statuses
 }
 
 // ServerStatus represents the status of an MCP server

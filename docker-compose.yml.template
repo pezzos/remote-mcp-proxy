@@ -48,6 +48,7 @@ services:
       - ./logs:/app/logs
       - npm-cache:/root/.npm
       - mcp-data:/app/mcp-data
+      - sessions-data:/app/sessions
     read_only: true
     tmpfs:
       - /tmp:exec
@@ -106,6 +107,8 @@ volumes:
   npm-cache:
     driver: local
   mcp-data:
+    driver: local
+  sessions-data:
     driver: local
 {{- if eq (getenv "ENABLE_LOCAL_TRAEFIK") "true" }}
   traefik-letsencrypt:
