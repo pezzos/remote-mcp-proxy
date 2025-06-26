@@ -1,0 +1,64 @@
+# Traefik Static Configuration
+# This file configures Traefik's core behavior
+
+# API and Dashboard Configuration
+api:
+  dashboard: true
+  insecure: true  # Set to false in production and use proper auth
+
+# Entry Points
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+
+# Providers
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: proxy
+  file:
+    filename: /etc/traefik/dynamic.yml
+    watch: true
+
+# Certificate Resolvers
+certificatesResolvers:
+  myresolver:
+    acme:
+      email: ${ACME_EMAIL}
+      storage: /letsencrypt/acme.json
+      httpChallenge:
+        entryPoint: web
+      # Alternative: Use DNS challenge for wildcard certificates
+      # dnsChallenge:
+      #   provider: cloudflare
+      #   resolvers:
+      #     - "1.1.1.1:53"
+      #     - "8.8.8.8:53"
+
+# Logging
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+  
+# Metrics (optional)
+# metrics:
+#   prometheus:
+#     addEntryPointsLabels: true
+#     addServicesLabels: true
+
+# Global Configuration
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false

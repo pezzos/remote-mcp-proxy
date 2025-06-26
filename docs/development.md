@@ -49,6 +49,61 @@ The service expects a configuration file mounted at `/app/config.json` with the 
 }
 ```
 
+## Traefik Integration
+
+The proxy supports both standalone Traefik deployment and integration with existing Traefik setups through environment variable configuration.
+
+### Quick Deployment Options
+
+1. **With Local Traefik** (includes Traefik service):
+   ```bash
+   # Configure environment
+   cp .env.example .env
+   # Edit .env: set ENABLE_LOCAL_TRAEFIK=true and configure DOMAIN, ACME_EMAIL
+   
+   # Generate and deploy
+   make up
+   ```
+
+2. **With Existing Traefik** (default):
+   ```bash
+   # Configure environment  
+   cp .env.example .env
+   # Edit .env: set ENABLE_LOCAL_TRAEFIK=false (or omit), configure DOMAIN
+   
+   # Ensure external 'proxy' network exists
+   docker network create proxy
+   
+   # Generate and deploy
+   make up
+   ```
+
+### Environment Configuration
+
+Set these variables in `.env`:
+
+- `ENABLE_LOCAL_TRAEFIK=true` - Include Traefik service in docker-compose
+- `ENABLE_LOCAL_TRAEFIK=false` - Use external Traefik network named 'proxy'
+- `DOMAIN=yourdomain.com` - Your base domain
+- `ACME_EMAIL=admin@yourdomain.com` - Email for Let's Encrypt (local Traefik only)
+
+### Key Features
+
+- **Dynamic MCP Routing**: Automatically routes `*.mcp.yourdomain.com` to appropriate MCP servers
+- **SSL/TLS Support**: Automatic Let's Encrypt certificates via HTTP challenge
+- **Security**: CORS headers, security headers, and rate limiting middleware
+- **Health Monitoring**: Integrated health checks and status endpoints
+- **Production Ready**: Secure defaults and hardened container configuration
+
+### Configuration Files
+
+The `traefik/` directory contains sample configurations for advanced setups:
+- `traefik.yml` - Traefik static configuration with DNS challenge support
+- `dynamic.yml` - Dynamic configuration with middleware and security headers
+- `INTEGRATION.md` - Detailed integration guide for complex scenarios
+
+For complete deployment instructions, see [traefik/README.md](../traefik/README.md).
+
 ## Key Implementation Notes
 
 - Each MCP server runs as a separate process managed by the proxy

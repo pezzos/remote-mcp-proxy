@@ -1,4 +1,43 @@
 services:
+{{- if eq (getenv "ENABLE_LOCAL_TRAEFIK") "true" }}
+  traefik:
+    image: traefik:v3.0
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - --api.dashboard=true
+      - --api.insecure=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.myresolver.acme.email=${ACME_EMAIL:-admin@${DOMAIN}}
+      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web
+      - --log.level=INFO
+      - --accesslog=true
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik-letsencrypt:/letsencrypt
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)
+      - traefik.http.routers.traefik.entrypoints=websecure
+      - traefik.http.routers.traefik.tls=true
+      - traefik.http.routers.traefik.tls.certresolver=myresolver
+      - traefik.http.routers.traefik.service=api@internal
+
+{{- end }}
   remote-mcp-proxy:
     image: remote-mcp-proxy:latest
     build: .
@@ -24,6 +63,10 @@ services:
       retries: 3
     networks:
       - proxy
+{{- if eq (getenv "ENABLE_LOCAL_TRAEFIK") "true" }}
+    depends_on:
+      - traefik
+{{- end }}
     labels:
       - traefik.enable=true
       - traefik.docker.network=proxy
@@ -39,4 +82,14 @@ services:
 
 networks:
   proxy:
+{{- if eq (getenv "ENABLE_LOCAL_TRAEFIK") "true" }}
+    driver: bridge
+{{- else }}
     external: true
+{{- end }}
+
+{{- if eq (getenv "ENABLE_LOCAL_TRAEFIK") "true" }}
+volumes:
+  traefik-letsencrypt:
+    driver: local
+{{- end }}

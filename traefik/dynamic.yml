@@ -1,0 +1,83 @@
+# Traefik Dynamic Configuration
+# This file configures routes, middlewares, and services that can be updated without restarting Traefik
+
+http:
+  # Middlewares
+  middlewares:
+    # Security headers
+    secure-headers:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - POST
+          - PUT
+          - DELETE
+          - OPTIONS
+        accessControlAllowOriginList:
+          - "*"
+        accessControlMaxAge: 100
+        hostsProxyHeaders:
+          - "X-Forwarded-Host"
+        sslRedirect: true
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        forceSTSHeader: true
+        
+    # CORS for MCP endpoints
+    mcp-cors:
+      headers:
+        accessControlAllowOriginList:
+          - "*"
+        accessControlAllowHeaders:
+          - "*"
+        accessControlAllowMethods:
+          - "GET"
+          - "POST"
+          - "PUT"
+          - "DELETE"
+          - "OPTIONS"
+        accessControlExposeHeaders:
+          - "*"
+        accessControlMaxAge: 86400
+        addVaryHeader: true
+
+    # Rate limiting (optional)
+    rate-limit:
+      rateLimit:
+        burst: 100
+        average: 50
+
+    # Authentication (optional - uncomment and configure as needed)
+    # basic-auth:
+    #   basicAuth:
+    #     users:
+    #       - "admin:$2y$10$..."  # Use htpasswd to generate
+
+  # Additional static routes (if needed)
+  routers:
+    # Example: Static file server for documentation
+    # docs:
+    #   rule: "Host(`docs.mcp.example.com`)"
+    #   entryPoints:
+    #     - websecure
+    #   service: docs-service
+    #   tls:
+    #     certResolver: myresolver
+    #   middlewares:
+    #     - secure-headers
+
+  services:
+    # Example service definitions
+    # docs-service:
+    #   loadBalancer:
+    #     servers:
+    #       - url: "http://docs-container:80"
+
+# TCP/UDP routing (if needed for other services)
+# tcp:
+#   routers: {}
+#   services: {}
+# udp:
+#   routers: {}
+#   services: {}

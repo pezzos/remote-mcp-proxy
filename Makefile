@@ -16,9 +16,18 @@ install-deps:
 # Generate docker-compose.yml from template and config.json
 docker-compose.yml: config.json docker-compose.yml.template check-deps
 	@echo "Generating docker-compose.yml from config.json..."
-	@(which gomplate > /dev/null && gomplate -d config=config.json -f docker-compose.yml.template -o docker-compose.yml) || \
-	 (test -x /tmp/gomplate && /tmp/gomplate -d config=config.json -f docker-compose.yml.template -o docker-compose.yml)
+	@if [ -f .env ]; then set -a && . ./.env && set +a; fi && \
+	(which gomplate > /dev/null && gomplate -d config=config.json -f docker-compose.yml.template -o docker-compose.yml) || \
+	(test -x /tmp/gomplate && /tmp/gomplate -d config=config.json -f docker-compose.yml.template -o docker-compose.yml)
 	@echo "Generated docker-compose.yml with MCP servers: $$(jq -r '.mcpServers | keys | join(", ")' config.json)"
+	@if [ -f .env ] && grep -q "ENABLE_LOCAL_TRAEFIK=true" .env; then \
+		echo "Local Traefik enabled - services will be available at:"; \
+		echo "  - Traefik Dashboard: https://traefik.$${DOMAIN:-example.com}"; \
+		echo "  - MCP Health: https://mcp.$${DOMAIN:-example.com}/health"; \
+		echo "  - MCP Servers: https://[server-name].mcp.$${DOMAIN:-example.com}/sse"; \
+	else \
+		echo "Using external Traefik network 'proxy'"; \
+	fi
 
 # Generate docker-compose.yml
 generate: docker-compose.yml
@@ -73,6 +82,10 @@ help:
 	@echo "  make logs          Show service logs"
 	@echo "  make clean         Remove generated docker-compose.yml"
 	@echo "  make help          Show this help"
+	@echo ""
+	@echo "Traefik Integration:"
+	@echo "  Set ENABLE_LOCAL_TRAEFIK=true in .env to include Traefik service"
+	@echo "  Set ENABLE_LOCAL_TRAEFIK=false (or omit) to use external Traefik"
 	@echo ""
 	@echo "The system will automatically generate Traefik routes for each MCP server"
 	@echo "defined in config.json. Current servers:"
