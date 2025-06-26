@@ -59,6 +59,14 @@ Complete documentation is organized in the `docs/` directory:
 4. **Solution Implementation** - Implement fixes based on root cause analysis
 5. **Documentation** - Update INVESTIGATIONS.md with findings and solutions
 
+**Enhanced Investigation Integration**:
+- **TodoWrite Integration**: Create investigation phases as todos, mark completed immediately after each phase
+- **Concurrent Evidence Gathering**: Use parallel tool calls for independent data collection (logs + status + config analysis)
+- **Systematic Documentation**: Update INVESTIGATIONS.md in real-time with findings to preserve knowledge
+- **Cross-Reference Patterns**: Link findings to existing documentation and previous investigation results
+- **Success Criteria**: Establish clear resolution criteria at start of investigation
+- **Pattern Recognition**: Document recurring error patterns and solutions for future reference
+
 **Reflection Workflow Process**:
 1. **Session Summary** - Review major accomplishments and changes made
 2. **Solution Documentation** - Record specific fixes, configurations, and code changes
@@ -171,11 +179,18 @@ Complete documentation is organized in the `docs/` directory:
 5. **Follow error handling patterns** - log both success and failure with appropriate levels
 
 ### Tool Usage Guidelines
-6. **Concurrent Tool Usage**:
+6. **Concurrent Tool Usage Optimization**:
    - **Use concurrent calls** for: Independent file reads, parallel searches, multiple bash commands that don't depend on each other
    - **Use sequential calls** for: Dependent operations, file edits that build on previous results, error handling flows
    - **Examples of good concurrency**: Reading multiple files simultaneously, running `git status` and `git diff` in parallel, searching different patterns
    - **Examples requiring sequence**: Edit file then verify changes, read file then modify based on contents, debug then fix then test
+   
+   **Decision Framework for Tool Concurrency**:
+   - **Investigation Phase**: Use concurrent Bash calls for parallel log analysis, health checks, and status gathering
+   - **Evidence Collection**: Batch multiple Read operations when examining related configuration files
+   - **System Analysis**: Combine Docker MCP tools with traditional commands for comprehensive system state
+   - **Performance**: Prioritize concurrent calls during information gathering, sequential during implementation
+   - **Dependencies**: If operation B needs results from operation A, use sequential; otherwise use concurrent
 7. **Search Tool Selection**:
    - **Use Task tool** for: Open-ended searches, keyword hunting across unknown codebases, "find me all X" queries
    - **Use Glob/Grep directly** for: Specific file patterns, known directory searches, targeted content searches
@@ -186,6 +201,71 @@ Complete documentation is organized in the `docs/` directory:
    - **Use Bash docker commands** for: Interactive operations, complex docker-compose workflows, local debugging
    - **Integration workflow**: Use Docker MCP tools in parallel with other debugging tools for comprehensive system analysis
    - **Preferred for investigations**: Docker MCP tools provide cleaner output and better integration with concurrent tool usage patterns
+
+### MCP Server Debugging Framework
+
+9. **MCP-Specific Error Classification**:
+   - **Protocol Errors**: JSON-RPC method not found (-32601), invalid params (-32602), internal error (-32603)
+   - **Connection Errors**: Client-side "-32000: Connection closed", timeout issues, SSE connection drops
+   - **Server Implementation Issues**: Missing methods (resources/list, prompts/list), incomplete protocol compliance
+   - **Namespace/Translation Issues**: Tool name prefix handling, normalization problems
+   - **Timeout Patterns**: Initialization timeouts, long-running operation timeouts, health check failures
+   - **Process Management**: Server crashes, force kills, stdio corruption, resource exhaustion
+
+10. **MCP Debugging Workflow**:
+    - **Phase 1**: Verify basic connectivity (health endpoints, container status)
+    - **Phase 2**: Analyze tool discovery (tools/list, normalization, prefix handling)
+    - **Phase 3**: Test tool execution (actual method calls, parameter handling)
+    - **Phase 4**: Monitor connection lifecycle (session management, cleanup)
+    - **Phase 5**: Investigate specific error patterns (timeout, method not found, connection issues)
+
+11. **Common MCP Error Patterns and Solutions**:
+    - **"Method not found" for tools**: Check namespace prefix stripping in denormalizeToolNames()
+    - **"Connection closed" errors**: Investigate HTTP timeout settings and long-running operations
+    - **Tool discovery works but calls fail**: Verify tool name normalization/denormalization
+    - **Server restarts frequently**: Check resource limits, stdio handling, and graceful shutdown
+    - **Protocol probe failures**: Expected for incomplete servers (resources/list, prompts/list)
+    - **Initialization timeouts**: Increase timeout limits, check npm package installation issues
+
+### Error Analysis and Classification Framework
+
+12. **Systematic Error Classification**:
+    **Client-Side vs Server-Side**:
+    - **Client-Side Indicators**: "-32000: Connection closed", Claude.ai error messages, timeout from client
+    - **Server-Side Indicators**: "-32601: Method not found", "-32603: Internal error", process crashes
+    - **Network/Infrastructure**: Connection refused, SSL issues, DNS problems, proxy failures
+    
+    **Error Source Identification**:
+    - **Protocol Layer**: JSON-RPC specification compliance, method implementation
+    - **Application Layer**: Business logic errors, data handling issues, resource management
+    - **Infrastructure Layer**: Container issues, networking, resource limits, deployment problems
+    - **Integration Layer**: Cross-service communication, authentication, session management
+
+13. **Evidence Gathering Strategy**:
+    **Concurrent Data Collection**:
+    - **System State**: Container status, health endpoints, resource usage
+    - **Application Logs**: Server logs, error patterns, request/response traces
+    - **Configuration**: Environment variables, MCP server configs, network settings
+    - **Timeline Analysis**: Correlate events across different log sources and system components
+    
+    **Pattern Recognition Techniques**:
+    - **Error Frequency**: One-time vs recurring issues
+    - **Error Timing**: Startup vs runtime vs shutdown phases
+    - **Error Context**: Specific operations, user actions, system states that trigger issues
+    - **Error Correlation**: Multiple errors that occur together or in sequence
+
+14. **Root Cause Analysis Framework**:
+    **Hypothesis Testing**:
+    - **Reproduce Issue**: Create minimal test case to trigger the error consistently
+    - **Isolate Variables**: Test individual components to identify the failing component
+    - **Timeline Reconstruction**: Map the sequence of events leading to the error
+    - **Configuration Impact**: Test with different configurations to identify problematic settings
+    
+    **Solution Validation**:
+    - **Targeted Fix**: Address the specific root cause identified
+    - **Regression Testing**: Ensure fix doesn't break other functionality
+    - **Documentation**: Record solution in INVESTIGATIONS.md for future reference
+    - **Monitoring**: Implement checks to detect if issue recurs
 
 ### Deployment Protocol
 

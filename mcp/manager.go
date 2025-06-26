@@ -67,18 +67,18 @@ type Server struct {
 
 // Manager manages multiple MCP server processes
 type Manager struct {
-	servers map[string]*Server // Global servers (legacy mode)
+	servers        map[string]*Server            // Global servers (legacy mode)
 	sessionServers map[string]map[string]*Server // sessionID -> serverName -> Server
-	configs map[string]config.MCPServer // Server configurations
-	mu      sync.RWMutex
+	configs        map[string]config.MCPServer   // Server configurations
+	mu             sync.RWMutex
 }
 
 // NewManager creates a new MCP manager
 func NewManager(configs map[string]config.MCPServer) *Manager {
 	m := &Manager{
-		servers: make(map[string]*Server),
+		servers:        make(map[string]*Server),
 		sessionServers: make(map[string]map[string]*Server),
-		configs: make(map[string]config.MCPServer),
+		configs:        make(map[string]config.MCPServer),
 	}
 
 	// Store configurations for later use
@@ -183,7 +183,7 @@ func (m *Manager) GetServerForSession(sessionID, serverName string) (*Server, bo
 
 	// Store the server
 	sessionMap[serverName] = server
-	
+
 	return server, true
 }
 
@@ -195,14 +195,14 @@ func (m *Manager) createSessionConfig(sessionID, serverName string, baseCfg conf
 		Args:    make([]string, len(baseCfg.Args)),
 		Env:     make(map[string]string),
 	}
-	
+
 	// Copy and substitute args with template variables
 	for i, arg := range baseCfg.Args {
 		arg = strings.ReplaceAll(arg, "{SESSION_ID}", sessionID)
 		arg = strings.ReplaceAll(arg, "{SERVER_NAME}", serverName)
 		sessionCfg.Args[i] = arg
 	}
-	
+
 	// Copy and substitute environment variables
 	for key, value := range baseCfg.Env {
 		// Replace template variables
@@ -210,7 +210,7 @@ func (m *Manager) createSessionConfig(sessionID, serverName string, baseCfg conf
 		value = strings.ReplaceAll(value, "{SERVER_NAME}", serverName)
 		sessionCfg.Env[key] = value
 	}
-	
+
 	return sessionCfg
 }
 
@@ -293,7 +293,7 @@ func (m *Manager) ensureSessionDirectory(sessionDir string) error {
 	if err := os.MkdirAll(sessionDir, 0755); err != nil {
 		return err
 	}
-	
+
 	// Create common subdirectories that MCP servers might need
 	subdirs := []string{"data", "cache", "temp"}
 	for _, subdir := range subdirs {
@@ -302,7 +302,7 @@ func (m *Manager) ensureSessionDirectory(sessionDir string) error {
 			logger.System().Warn("Failed to create subdirectory %s: %v", fullPath, err)
 		}
 	}
-	
+
 	return nil
 }
 

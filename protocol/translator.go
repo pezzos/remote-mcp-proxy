@@ -513,6 +513,22 @@ func (t *Translator) denormalizeToolNames(params interface{}) interface{} {
 	if paramsMap, ok := params.(map[string]interface{}); ok {
 		if name, exists := paramsMap["name"]; exists {
 			if nameStr, ok := name.(string); ok {
+				// CRITICAL FIX: Strip server name prefixes (Memory:, Github:, etc.)
+				//
+				// Claude.ai adds server name prefixes to tool names for disambiguation
+				// when multiple MCP servers are connected. For example:
+				// - Claude.ai calls "Memory:create_entities"
+				// - But Memory MCP server expects "create_entities"
+				// - Without this fix, all tool calls result in "Method not found"
+				//
+				// This transforms: "Memory:create_entities" -> "create_entities"
+				if strings.Contains(nameStr, ":") {
+					parts := strings.SplitN(nameStr, ":", 2)
+					if len(parts) == 2 {
+						nameStr = strings.TrimSpace(parts[1]) // Use part after colon
+					}
+				}
+
 				// Convert snake_case back to original API format
 				// api_get_user -> API-get-user
 				originalName := strings.ReplaceAll(nameStr, "_", "-")

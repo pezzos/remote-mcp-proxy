@@ -55,12 +55,14 @@ type Logger struct {
 	logDate            string
 	healthCheckCounter int
 	lastHealthLog      time.Time
+	sessionID          string // Session ID for session-aware logging
 }
 
 type Config struct {
 	Level     LogLevel
 	Filename  string
 	Retention time.Duration
+	SessionID string // Optional session ID for MCP loggers
 }
 
 func New(config Config) (*Logger, error) {
@@ -94,6 +96,7 @@ func New(config Config) (*Logger, error) {
 		logDate:            now.Format("2006-01-02"),
 		healthCheckCounter: 0,
 		lastHealthLog:      time.Time{},
+		sessionID:          config.SessionID,
 	}
 
 	// Log startup message with date context
@@ -139,7 +142,14 @@ func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
 	// Remove redundant prefixes (INFO: INFO becomes just INFO)
 	message = l.cleanMessage(message)
 
-	prefix := fmt.Sprintf("[%s] ", adjustedLevel.String())
+	// Build log prefix with session ID if available
+	var prefix string
+	if l.sessionID != "" {
+		prefix = fmt.Sprintf("%s [%s] ", l.sessionID, adjustedLevel.String())
+	} else {
+		prefix = fmt.Sprintf("[%s] ", adjustedLevel.String())
+	}
+
 	l.logger.Print(prefix + message)
 	l.lastLogTime = time.Now()
 }

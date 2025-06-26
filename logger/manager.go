@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -94,12 +95,23 @@ func (m *Manager) GetMCPLogger(serverName string) (*Logger, error) {
 		return logger, nil
 	}
 
-	// Create new MCP logger
-	filename := filepath.Join("/app/logs", fmt.Sprintf("mcp-%s.log", serverName))
+	// Extract session ID and base server name from server name (format: servername-sessionid)
+	sessionID := ""
+	baseServerName := serverName
+	if parts := strings.Split(serverName, "-"); len(parts) >= 2 {
+		// First part is the base server name (e.g., memory, filesystem, etc.)
+		baseServerName = parts[0]
+		// Join all parts after the first one as session ID (e.g., memory-test-new -> test-new)
+		sessionID = strings.Join(parts[1:], "-")
+	}
+
+	// Create new MCP logger using ONLY base server name for filename (no session ID)
+	filename := filepath.Join("/app/logs", fmt.Sprintf("mcp-%s.log", baseServerName))
 	config := Config{
 		Level:     m.mcpLevel,
 		Filename:  filename,
 		Retention: m.mcpRetention,
+		SessionID: sessionID,
 	}
 
 	logger, err := New(config)

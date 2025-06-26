@@ -376,14 +376,14 @@ func (s *Server) handleSessionHealth(w http.ResponseWriter, r *http.Request) {
 
 	// Get active connections which represent active sessions
 	connections := s.connectionManager.GetConnections()
-	
+
 	// Build session summary
 	sessions := make(map[string]interface{})
-	
+
 	for sessionID, conn := range connections {
 		// Get session-specific server information
 		sessionServers := s.mcpManager.GetSessionServers(sessionID)
-		
+
 		sessions[sessionID[:8]] = map[string]interface{}{
 			"sessionId":     sessionID[:8],
 			"fullSessionId": sessionID,
@@ -396,9 +396,9 @@ func (s *Server) handleSessionHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := map[string]interface{}{
-		"sessions":    sessions,
+		"sessions":      sessions,
 		"totalSessions": len(sessions),
-		"timestamp":   time.Now(),
+		"timestamp":     time.Now(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -423,7 +423,7 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 	connections := s.connectionManager.GetConnections()
 	var fullSessionID string
 	var connection *ConnectionInfo
-	
+
 	for fullID, conn := range connections {
 		if strings.HasPrefix(fullID, sessionID) {
 			fullSessionID = fullID
@@ -440,17 +440,17 @@ func (s *Server) handleSessionDetail(w http.ResponseWriter, r *http.Request) {
 
 	// Get session-specific server information
 	sessionServers := s.mcpManager.GetSessionServers(fullSessionID)
-	
+
 	response := map[string]interface{}{
-		"sessionId":     sessionID,
-		"fullSessionId": fullSessionID,
-		"serverName":    connection.ServerName,
-		"connectedAt":   connection.ConnectedAt,
-		"duration":      time.Since(connection.ConnectedAt).String(),
-		"servers":       sessionServers,
-		"serverCount":   len(sessionServers),
+		"sessionId":        sessionID,
+		"fullSessionId":    fullSessionID,
+		"serverName":       connection.ServerName,
+		"connectedAt":      connection.ConnectedAt,
+		"duration":         time.Since(connection.ConnectedAt).String(),
+		"servers":          sessionServers,
+		"serverCount":      len(sessionServers),
 		"sessionDirectory": fmt.Sprintf("/app/sessions/%s", fullSessionID),
-		"timestamp":     time.Now(),
+		"timestamp":        time.Now(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -473,7 +473,12 @@ func (s *Server) handleListTools(w http.ResponseWriter, r *http.Request) {
 
 	// Get session ID for session-aware server selection
 	sessionID := s.getSessionID(r)
-	logger.System().Debug("Using session ID: %s for listtools", sessionID[:8])
+	// Safe substring for session ID (might be shorter than 8 chars)
+	sessionIDShort := sessionID
+	if len(sessionID) > 8 {
+		sessionIDShort = sessionID[:8]
+	}
+	logger.System().Debug("Using session ID: %s for listtools", sessionIDShort)
 
 	// Get the session-aware MCP server
 	mcpServer, exists := s.mcpManager.GetServerForSession(sessionID, serverName)
@@ -1335,7 +1340,22 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	logger.System().Info("INFO: Handling session request %s synchronously", jsonrpcMsg.Method)
 
 	// Send request and receive response from MCP server using serialized queue
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	//
+	// INVESTIGATION FIX: Increased timeout from 30s to 2 minutes for tools/call operations
+	//
+	// Root cause: Memory MCP server tools/call operations (knowledge graph queries, entity creation)
+	// can take longer than 30 seconds, causing "Connection closed" errors in Claude.ai.
+	// The 30-second timeout was appropriate for quick operations like tools/list, initialize,
+	// but insufficient for computationally expensive operations.
+	//
+	// Timeline analysis showed:
+	// - 18:19:43: tools/list succeeds (fast metadata query)
+	// - 18:20:28: HTTP context cancelled (45s later = 30s timeout + cleanup)
+	// - Claude.ai reports "-32000: Connection closed" (client-side error)
+	//
+	// This timeout applies to all MCP operations sent through handleSessionMessage,
+	// including tools/call which is the most likely to exceed 30 seconds.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	responseBytes, err := mcpServer.SendAndReceive(ctx, body)
