@@ -648,6 +648,109 @@ if err := json.Unmarshal(data, &message); err != nil {
 - **Monitor MCP server** health individually
 - **Return appropriate HTTP status** codes
 
+#### Monitoring API Endpoints
+
+The proxy exposes several monitoring endpoints for health tracking and resource monitoring:
+
+**System Health Endpoint**:
+```bash
+GET /health
+# Returns: {"status": "healthy"}
+# Use: Basic service availability check
+```
+
+**Detailed Server Health**:
+```bash
+GET /health/servers
+# Returns: Comprehensive health status for all MCP servers
+# Response: {
+#   "timestamp": "2025-06-26T10:30:00Z",
+#   "servers": {
+#     "memory": {
+#       "name": "memory",
+#       "status": "healthy|unhealthy|unknown",
+#       "lastCheck": "2025-06-26T10:29:45Z",
+#       "responseTimeMs": 120,
+#       "consecutiveFails": 0,
+#       "restartCount": 0,
+#       "lastError": ""
+#     }
+#   },
+#   "summary": {
+#     "total": 4,
+#     "healthy": 3,
+#     "unhealthy": 1,
+#     "unknown": 0
+#   }
+# }
+```
+
+**Resource Metrics**:
+```bash
+GET /health/resources
+# Returns: Current resource usage for all MCP processes
+# Response: {
+#   "timestamp": "2025-06-26T10:30:00Z",
+#   "processes": [
+#     {
+#       "pid": 123,
+#       "name": "memory-server",
+#       "memoryMB": 145.2,
+#       "cpuPercent": 2.1,
+#       "virtualMB": 512.0,
+#       "residentMB": 145.2,
+#       "timestamp": "2025-06-26T10:30:00Z"
+#     }
+#   ],
+#   "summary": {
+#     "processCount": 4,
+#     "totalMemoryMB": 580.5,
+#     "totalCPU": 8.3,
+#     "averageMemoryMB": 145.1,
+#     "averageCPU": 2.1
+#   }
+# }
+```
+
+#### Development Monitoring Usage
+
+**During Development**:
+```bash
+# Check if all servers are healthy during development
+curl http://localhost:8080/health/servers
+
+# Monitor resource usage patterns
+curl http://localhost:8080/health/resources
+
+# Basic health check for CI/CD
+curl http://localhost:8080/health
+```
+
+**Production Monitoring Integration**:
+- Use `/health/servers` for alerting on unhealthy MCP servers
+- Monitor `/health/resources` for memory leaks and CPU issues  
+- Set up automated alerts for restart count increases
+- Include `/health` in uptime monitoring services
+
+#### Health Monitoring Architecture
+
+The monitoring system includes:
+
+1. **Health Checker** (`health/checker.go`):
+   - Periodic ping-based health checks every 30 seconds
+   - Automatic server restart after 3 consecutive failures
+   - Restart limits (max 3 per 5-minute window)
+
+2. **Resource Monitor** (`monitoring/resources.go`):
+   - Process-level memory/CPU tracking
+   - Alert thresholds (>500MB memory, >80% CPU)
+   - Automatic MCP process discovery
+
+3. **Integration Points**:
+   - Health checker initialized in `main.go`
+   - Monitoring endpoints exposed in `proxy/server.go`
+   - Graceful shutdown cleanup included
+
 ### Code Review and Quality
 
 #### Before Committing

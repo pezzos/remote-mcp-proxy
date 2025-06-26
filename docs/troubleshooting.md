@@ -1,47 +1,141 @@
 # Remote MCP Proxy - Troubleshooting Guide
 
-## Stale SSE Connection Issue - June 25, 2025 ⚠️ **ACTIVE**
+## 🆕 Memory Server Stability Issues - Latest Version ⚠️ **ACTIVE**
 
 ### Problem Statement
-**Issue**: Claude.ai shows "connection succeeded" but integration remains "To connect", preventing tool discovery and usage.
+**Issue**: Memory MCP server becomes unresponsive after initial successful operations, causing timeouts and failed tool calls.
 
 ### Root Cause Analysis
-**Technical Issue**: SSE connections become stuck in continuous keep-alive loops without processing actual requests, preventing tool discovery from completing.
+**Technical Issue**: Memory MCP server process hangs after handling some requests, becoming completely unresponsive.
 
 **Symptoms**:
-1. Container logs show constant "SSE connection active... waiting for requests" messages every second
-2. Claude.ai reports successful connection but tools never appear
-3. Integration status remains "To connect" indefinitely
-4. Multiple stale sessions accumulate over time
+1. Initial operations succeed (initialize, tools/list)
+2. Server suddenly stops responding to requests
+3. 30-second timeouts on all subsequent requests
+4. Auto-restart attempts often fail with same pattern
+5. "Context deadline exceeded" errors in logs
 
 **Evidence from Logs**:
 ```
-2025/06/25 10:42:06 DEBUG: SSE connection active for server sequential-thinking, session 24913c063887e37772aafa574f83e5cd - waiting for requests
-2025/06/25 10:42:06 DEBUG: SSE connection active for server memory, session 036434c1ebf50c9e869884e95caedea3 - waiting for requests
-(repeated every second)
+2025/06/26 08:21:20 [INFO] Successfully received response from server memory
+2025/06/26 08:21:36 [ERROR] Context cancelled while waiting for response from server memory
+2025/06/26 08:22:59 [WARN] MCP server memory appears hung, attempting restart...
 ```
 
-### Immediate Solution ✅
-**Manual Cleanup**: Force cleanup of stale connections using the cleanup endpoint
-```bash
-# Remove stale connections immediately
-docker exec remote-mcp-proxy curl -X POST http://localhost:8080/cleanup
+### 🆕 New Solutions Implemented ✅
 
-# Verify cleanup success
-docker logs remote-mcp-proxy --tail=10
-# Should show: "Manual cleanup completed - cleaned X connections"
+**1. Proactive Health Monitoring**:
+- **Health Checker**: Continuous monitoring with 30-second ping intervals
+- **Early Detection**: 3 consecutive failures trigger automatic recovery
+- **Smart Restart**: Graceful server restart with process cleanup
+- **Restart Limits**: Maximum 3 restarts per 5-minute window to prevent loops
+
+```bash
+# Check real-time health status
+curl https://mcp.your-domain.com/health/servers
+# Response shows health status, response times, restart counts
 ```
 
-**Alternative Solution**: Container restart (also effective but more disruptive)
+**2. Resource Monitoring & Alerting**:
+- **Process Tracking**: Monitor memory and CPU usage of all MCP processes
+- **Alert Thresholds**: Warn on >500MB memory or >80% CPU per process
+- **Resource Summaries**: Logged every minute for trend analysis
+
 ```bash
-# Nuclear option - restart container to clear all connections
+# Monitor resource usage
+curl https://mcp.your-domain.com/health/resources
+# Shows memory/CPU usage, process counts, averages
+```
+
+**3. Container Resource Management**:
+- **Memory Limits**: 2GB hard limit with 512MB guaranteed reservation
+- **CPU Limits**: 2.0 CPU limit with 0.5 CPU guaranteed
+- **OOM Prevention**: Prevents resource exhaustion causing hangs
+
+**4. Enhanced Logging & Debugging**:
+- **Persistent Logs**: Volume-mounted `/logs` directory
+- **Separate Log Files**: System logs + individual MCP server logs
+- **Request Correlation**: SessionID included in all log messages
+- **Log Retention**: Configurable cleanup (24h system, 12h MCP)
+
+### Manual Troubleshooting Steps
+
+**1. Check Health Status**:
+```bash
+# Overall system health
+curl https://mcp.your-domain.com/health
+
+# Detailed server health
+curl https://mcp.your-domain.com/health/servers
+
+# Resource usage
+curl https://mcp.your-domain.com/health/resources
+```
+
+**2. Review Logs**:
+```bash
+# System logs
+docker exec remote-mcp-proxy tail -f /app/logs/system.log
+
+# Memory server specific logs
+docker exec remote-mcp-proxy tail -f /app/logs/mcp-memory.log
+
+# Check for patterns
+docker exec remote-mcp-proxy grep "ERROR\|WARN" /app/logs/mcp-memory.log
+```
+
+**3. Manual Server Restart** (if needed):
+```bash
+# The health checker should handle this automatically, but if needed:
+# Note: Manual restart endpoints are not exposed for security
+# If persistent issues occur, container restart may be needed:
 docker-compose restart remote-mcp-proxy
-
-# Wait for healthy status
-docker-compose ps
 ```
 
-### Prevention Strategy Implemented ✅
+### 🔧 Configuration Tuning
+
+**Adjust Health Check Sensitivity** (via environment variables):
+```bash
+# In .env file - example of more aggressive monitoring
+LOG_LEVEL_SYSTEM=DEBUG    # More detailed logging
+LOG_LEVEL_MCP=DEBUG       # Detailed MCP server logs
+LOG_RETENTION_SYSTEM=48h  # Longer retention for analysis
+LOG_RETENTION_MCP=24h     # Longer MCP log retention
+```
+
+**Monitor Resource Trends**:
+- Check `/health/resources` regularly for memory/CPU patterns
+- Look for gradual memory increases (potential leaks)
+- Monitor restart frequency in `/health/servers`
+
+### Expected Behavior With New System
+
+**Normal Operation**:
+1. Health checker reports all servers as "healthy"
+2. Resource usage stays within normal ranges (<500MB/server)
+3. Restart count remains low or zero
+4. Logs show successful request/response cycles
+
+**During Issues**:
+1. Health status changes to "unhealthy" after 3 failed pings
+2. Automatic restart attempt logged
+3. Resource monitoring may show anomalies before failure
+4. Detailed error information captured in server-specific logs
+
+**Recovery**:
+1. Successful restart returns status to "healthy"
+2. Restart count increments (tracked for pattern analysis)
+3. Normal operation resumes automatically
+4. If restart limit reached, alerting continues without restart attempts
+
+---
+
+## ✅ RESOLVED: Stale SSE Connection Issue
+
+### Problem Statement (RESOLVED)
+**Issue**: Claude.ai showed "connection succeeded" but integration remained "To connect", preventing tool discovery and usage.
+
+### Solution Implemented ✅
 
 **Automatic Stale Connection Detection**:
 - **SSE Connection Timeout**: Connections idle for 5+ minutes automatically close
@@ -54,10 +148,11 @@ docker-compose ps
 - **Connection Monitoring**: Logs cleanup activity when stale connections are removed
 - **Resource Management**: Prevents accumulation of zombie connections
 
-**Code Locations**:
-- SSE Connection Monitoring: `proxy/server.go:680-750`
-- Background Cleanup: `proxy/server.go:161-183`
-- Connection Manager: `proxy/server.go:112-129`
+**Manual Cleanup** (if needed):
+```bash
+# Force cleanup of stale connections
+curl -X POST https://mcp.your-domain.com/cleanup
+```
 
 ---
 

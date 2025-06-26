@@ -14,8 +14,10 @@ import (
 
 	"github.com/gorilla/mux"
 	"remote-mcp-proxy/config"
+	"remote-mcp-proxy/health"
 	"remote-mcp-proxy/logger"
 	"remote-mcp-proxy/mcp"
+	"remote-mcp-proxy/monitoring"
 	"remote-mcp-proxy/protocol"
 )
 
@@ -25,6 +27,8 @@ type Server struct {
 	translator        *protocol.Translator
 	connectionManager *ConnectionManager
 	config            *config.Config
+	healthChecker     *health.HealthChecker
+	resourceMonitor   *monitoring.ResourceMonitor
 }
 
 // ConnectionManager manages active SSE connections
@@ -71,7 +75,7 @@ func (cm *ConnectionManager) AddConnection(sessionID, serverName string, ctx con
 		Cancel:      cancel,
 	}
 
-	logger.System().Info("INFO: Added connection for session %s (total: %d/%d)", sessionID, len(cm.connections), cm.maxConnections)
+	logger.System().Info("Added connection for session %s (total: %d/%d)", sessionID, len(cm.connections), cm.maxConnections)
 	return nil
 }
 
@@ -86,7 +90,7 @@ func (cm *ConnectionManager) RemoveConnection(sessionID string) {
 			conn.Cancel()
 		}
 		delete(cm.connections, sessionID)
-		logger.System().Info("INFO: Removed connection for session %s (remaining: %d)", sessionID, len(cm.connections))
+		logger.System().Info("Removed connection for session %s (remaining: %d)", sessionID, len(cm.connections))
 	}
 }
 
@@ -128,17 +132,17 @@ func (cm *ConnectionManager) CleanupStaleConnections(maxAge time.Duration) {
 	}
 
 	if len(removed) > 0 {
-		logger.System().Info("INFO: Cleaned up %d stale connections: %v", len(removed), removed)
+		logger.System().Info("Cleaned up %d stale connections: %v", len(removed), removed)
 	}
 }
 
 // NewServer creates a new proxy server (backward compatibility)
 func NewServer(mcpManager *mcp.Manager) *Server {
-	return NewServerWithConfig(mcpManager, nil)
+	return NewServerWithConfig(mcpManager, nil, nil, nil)
 }
 
 // NewServerWithConfig creates a new proxy server with configuration
-func NewServerWithConfig(mcpManager *mcp.Manager, cfg *config.Config) *Server {
+func NewServerWithConfig(mcpManager *mcp.Manager, cfg *config.Config, healthChecker *health.HealthChecker, resourceMonitor *monitoring.ResourceMonitor) *Server {
 	const maxConnections = 100 // Configurable connection limit
 
 	server := &Server{
@@ -146,14 +150,16 @@ func NewServerWithConfig(mcpManager *mcp.Manager, cfg *config.Config) *Server {
 		translator:        protocol.NewTranslator(),
 		connectionManager: NewConnectionManager(maxConnections),
 		config:            cfg,
+		healthChecker:     healthChecker,
+		resourceMonitor:   resourceMonitor,
 	}
 
 	// Start background cleanup routine
 	go server.startConnectionCleanup()
 
-	logger.System().Info("INFO: Created proxy server with max %d connections", maxConnections)
+	logger.System().Info("Created proxy server with max %d connections", maxConnections)
 	if cfg != nil {
-		logger.System().Info("INFO: Configured domain: %s", cfg.GetDomain())
+		logger.System().Info("Configured domain: %s", cfg.GetDomain())
 	}
 	return server
 }
@@ -165,7 +171,7 @@ func (s *Server) startConnectionCleanup() {
 
 	maxAge := 2 * time.Minute // Remove connections older than 2 minutes for faster cleanup
 
-	logger.System().Info("INFO: Started automatic connection cleanup (interval: 30s, max age: %v)", maxAge)
+	logger.System().Info("Started automatic connection cleanup (interval: 30s, max age: %v)", maxAge)
 
 	for {
 		select {
@@ -175,7 +181,7 @@ func (s *Server) startConnectionCleanup() {
 			afterCount := s.connectionManager.GetConnectionCount()
 
 			if beforeCount != afterCount {
-				logger.System().Info("INFO: Automatic cleanup removed %d stale connections (%d -> %d active)",
+				logger.System().Info("Automatic cleanup removed %d stale connections (%d -> %d active)",
 					beforeCount-afterCount, beforeCount, afterCount)
 			}
 		}
@@ -221,7 +227,7 @@ func (s *Server) subdomainMiddleware(next http.Handler) http.Handler {
 				// Check if it's a valid server name and not a utility endpoint
 				serverName := pathParts[0]
 				if serverName != "health" && serverName != "listmcp" && serverName != "listtools" &&
-					serverName != "oauth" && serverName != ".well-known" {
+					serverName != "cleanup" && serverName != "oauth" && serverName != ".well-known" {
 
 					// Validate server exists in configuration (if config is available)
 					if s.config != nil {
@@ -266,6 +272,10 @@ func (s *Server) Router() http.Handler {
 	r.HandleFunc("/listmcp", s.handleListMCP).Methods("GET", "OPTIONS")
 	r.HandleFunc("/listtools/{server:[^/]+}", s.handleListTools).Methods("GET", "OPTIONS")
 	r.HandleFunc("/cleanup", s.handleCleanup).Methods("POST", "OPTIONS")
+
+	// Health and monitoring endpoints
+	r.HandleFunc("/health/servers", s.handleServerHealth).Methods("GET", "OPTIONS")
+	r.HandleFunc("/health/resources", s.handleResourceMetrics).Methods("GET", "OPTIONS")
 
 	// OAuth 2.0 Dynamic Client Registration endpoints
 	r.HandleFunc("/.well-known/oauth-authorization-server", s.handleOAuthMetadata).Methods("GET")
@@ -493,30 +503,21 @@ func (s *Server) handleMCPRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Comprehensive request logging
-	logger.System().Info("=== MCP REQUEST START ===")
-	logger.System().Info("INFO: Method: %s, URL: %s, Server: %s (from subdomain)", r.Method, r.URL.String(), serverName)
-	logger.System().Info("INFO: Remote Address: %s", r.RemoteAddr)
-	logger.System().Info("INFO: User-Agent: %s", r.Header.Get("User-Agent"))
-	logger.System().Info("INFO: Content-Type: %s", r.Header.Get("Content-Type"))
-	logger.System().Info("INFO: Accept: %s", r.Header.Get("Accept"))
-	logger.System().Info("INFO: Origin: %s", r.Header.Get("Origin"))
-	logger.System().Info("INFO: Authorization: %s", func() string {
-		auth := r.Header.Get("Authorization")
-		if auth != "" {
-			if len(auth) > 20 {
-				return auth[:20] + "..."
+	// Consolidated request logging (reduce token usage)
+	logger.System().Info(">>> MCP %s %s via %s from %s", r.Method, r.URL.String(), serverName, r.RemoteAddr)
+
+	// Only log auth and session at DEBUG level to reduce verbosity
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		logger.System().Debug("Auth: %s", func() string {
+			if len(auth) > 15 {
+				return auth[:15] + "..."
 			}
 			return auth
-		}
-		return "none"
-	}())
+		}())
+	}
 
-	// Log all headers starting with X- or Mcp-
-	for name, values := range r.Header {
-		if strings.HasPrefix(strings.ToLower(name), "x-") || strings.HasPrefix(strings.ToLower(name), "mcp-") {
-			logger.System().Info("INFO: Header %s: %v", name, values)
-		}
+	if sessionID := r.Header.Get("Mcp-Session-Id"); sessionID != "" {
+		logger.System().Debug("Session: %s", sessionID)
 	}
 
 	// Validate authentication
@@ -768,10 +769,18 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 		return
 	}
 	logger.System().Info("SUCCESS: Request body read (%d bytes)", len(body))
-	logger.System().Info("INFO: Request body: %s", string(body))
+	// Smart logging - detect error content and use appropriate level
+	bodyStr := string(body)
+	if strings.Contains(bodyStr, "error") || strings.Contains(bodyStr, "timeout") || strings.Contains(bodyStr, "cancelled") {
+		logger.System().Error("Request body contains error: %s", bodyStr)
+	} else if strings.Contains(bodyStr, "Method not found") {
+		logger.System().Warn("Request body: %s", bodyStr)
+	} else {
+		logger.System().Debug("Request body: %s", bodyStr) // Reduce verbosity to DEBUG
+	}
 
 	// Parse the JSON-RPC message to check if it's a handshake message
-	logger.System().Info("INFO: Parsing JSON-RPC message...")
+	logger.System().Debug("Parsing JSON-RPC message...")
 	var jsonrpcMsg protocol.JSONRPCMessage
 	if err := json.Unmarshal(body, &jsonrpcMsg); err != nil {
 		logger.System().Error(" Invalid JSON-RPC message: %v", err)
@@ -780,11 +789,10 @@ func (s *Server) handleMCPMessage(w http.ResponseWriter, r *http.Request, mcpSer
 		return
 	}
 	logger.System().Info("SUCCESS: JSON-RPC message parsed")
-	logger.System().Info("INFO: Method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
 
 	// Generate or get session ID
 	sessionID := s.getSessionID(r)
-	logger.System().Info("INFO: Session ID: %s", sessionID)
+	logger.System().Info("INFO: Method: %s, ID: %v, SessionID: %s", jsonrpcMsg.Method, jsonrpcMsg.ID, sessionID)
 
 	// CRITICAL FIX: Only handle handshake messages if this is NOT a session endpoint request
 	//
@@ -1175,7 +1183,7 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	logger.System().Info("SUCCESS: Session message JSON-RPC parsed")
-	logger.System().Info("INFO: Session message method: %s, ID: %v", jsonrpcMsg.Method, jsonrpcMsg.ID)
+	logger.System().Info("INFO: Session message method: %s, ID: %v, SessionID: %s", jsonrpcMsg.Method, jsonrpcMsg.ID, sessionID)
 
 	// CRITICAL FIX: Allow handshake messages on uninitialized sessions
 	//
@@ -1473,4 +1481,117 @@ func generateRandomString(length int) string {
 		return fmt.Sprintf("%d", time.Now().UnixNano())
 	}
 	return hex.EncodeToString(bytes)
+}
+
+// handleServerHealth returns health status for all MCP servers
+func (s *Server) handleServerHealth(w http.ResponseWriter, r *http.Request) {
+	logger.System().Info("Handling server health check request")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if s.healthChecker == nil {
+		http.Error(w, "Health checker not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	healthStatus := s.healthChecker.GetHealthStatus()
+
+	response := map[string]interface{}{
+		"timestamp": time.Now(),
+		"servers":   healthStatus,
+		"summary": map[string]int{
+			"total":     len(healthStatus),
+			"healthy":   0,
+			"unhealthy": 0,
+			"unknown":   0,
+		},
+	}
+
+	// Calculate summary
+	for _, health := range healthStatus {
+		switch health.Status {
+		case "healthy":
+			response["summary"].(map[string]int)["healthy"]++
+		case "unhealthy":
+			response["summary"].(map[string]int)["unhealthy"]++
+		default:
+			response["summary"].(map[string]int)["unknown"]++
+		}
+	}
+
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logger.System().Error("Failed to encode server health response: %v", err)
+	}
+}
+
+// handleResourceMetrics returns resource usage metrics for MCP processes
+func (s *Server) handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
+	logger.System().Info("Handling resource metrics request")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+	if r.Method == "OPTIONS" {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if s.resourceMonitor == nil {
+		http.Error(w, "Resource monitor not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	metrics, err := s.resourceMonitor.GetCurrentMetrics()
+	if err != nil {
+		logger.System().Error("Failed to get resource metrics: %v", err)
+		http.Error(w, "Failed to get resource metrics", http.StatusInternalServerError)
+		return
+	}
+
+	// Calculate totals
+	totalMemoryMB := 0.0
+	totalCPU := 0.0
+
+	for _, metric := range metrics {
+		totalMemoryMB += metric.MemoryMB
+		totalCPU += metric.CPUPercent
+	}
+
+	response := map[string]interface{}{
+		"timestamp": time.Now(),
+		"processes": metrics,
+		"summary": map[string]interface{}{
+			"processCount":  len(metrics),
+			"totalMemoryMB": totalMemoryMB,
+			"totalCPU":      totalCPU,
+			"averageMemoryMB": func() float64 {
+				if len(metrics) > 0 {
+					return totalMemoryMB / float64(len(metrics))
+				}
+				return 0
+			}(),
+			"averageCPU": func() float64 {
+				if len(metrics) > 0 {
+					return totalCPU / float64(len(metrics))
+				}
+				return 0
+			}(),
+		},
+	}
+
+	w.WriteHeader(http.StatusOK)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		logger.System().Error("Failed to encode resource metrics response: %v", err)
+	}
 }

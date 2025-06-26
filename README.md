@@ -710,37 +710,210 @@ The proxy implements the Remote MCP protocol specification to enable Claude.ai i
 
 **Tool Name Normalization**: Tool names are automatically converted from hyphenated format (API-get-user) to snake_case (api_get_user) for Claude.ai compatibility, with bidirectional transformation for tool calls.
 
-## Monitoring and Health Checks
+## 📊 Monitoring, Health Checks & Resource Management
 
-The proxy includes several endpoints for monitoring and debugging:
+The proxy includes comprehensive monitoring and stability features designed to prevent server hangs and ensure reliable operation.
 
-### Health Check
+### 🔍 Health Monitoring & Auto-Recovery
+
+**Proactive Health Checks**: The proxy continuously monitors all MCP servers with periodic ping checks every 30 seconds.
+
 ```bash
-# Check proxy health
-curl http://localhost:8080/health
+# Check overall health
+curl https://mcp.your-domain.com/health
 # Response: {"status":"healthy"}
+
+# Get detailed health status for all MCP servers
+curl https://mcp.your-domain.com/health/servers
+# Response: {
+#   "timestamp": "2025-06-26T10:30:00Z",
+#   "servers": {
+#     "memory": {
+#       "name": "memory",
+#       "status": "healthy",
+#       "lastCheck": "2025-06-26T10:29:45Z",
+#       "responseTimeMs": 120,
+#       "consecutiveFails": 0,
+#       "restartCount": 0
+#     }
+#   },
+#   "summary": {
+#     "total": 4,
+#     "healthy": 3,
+#     "unhealthy": 1,
+#     "unknown": 0
+#   }
+# }
 ```
 
-### List Configured MCP Servers
+**Automatic Recovery**: When servers become unresponsive:
+- ✅ **Early Detection**: 3 consecutive failed health checks trigger recovery
+- ✅ **Smart Restart**: Automatic server restart with graceful cleanup
+- ✅ **Restart Limits**: Maximum 3 restarts per 5-minute window to prevent loops
+- ✅ **Status Tracking**: Comprehensive health history and error tracking
+
+### 📈 Resource Monitoring & Alerting
+
+**Real-time Resource Tracking**: Monitor memory and CPU usage of all MCP processes.
+
+```bash
+# Get current resource usage for all MCP processes
+curl https://mcp.your-domain.com/health/resources
+# Response: {
+#   "timestamp": "2025-06-26T10:30:00Z",
+#   "processes": [
+#     {
+#       "pid": 123,
+#       "name": "memory-server",
+#       "memoryMB": 145.2,
+#       "cpuPercent": 2.1,
+#       "virtualMB": 512.0,
+#       "residentMB": 145.2
+#     }
+#   ],
+#   "summary": {
+#     "processCount": 4,
+#     "totalMemoryMB": 580.5,
+#     "totalCPU": 8.3,
+#     "averageMemoryMB": 145.1,
+#     "averageCPU": 2.1
+#   }
+# }
+```
+
+**Alert Thresholds**:
+- 🚨 **Memory Alert**: >500MB per process
+- 🚨 **CPU Alert**: >80% CPU usage per process
+- 📊 **Logging**: Resource summaries logged every minute
+
+### 🛡️ Resource Management & Container Limits
+
+**Container Resource Limits**: Prevent resource exhaustion that can cause server hangs.
+
+```yaml
+# Docker Compose Resource Configuration
+deploy:
+  resources:
+    limits:
+      memory: 2G        # Maximum memory allocation
+      cpus: '2.0'       # Maximum CPU allocation
+    reservations:
+      memory: 512M      # Guaranteed memory
+      cpus: '0.5'       # Guaranteed CPU
+```
+
+**Benefits**:
+- ✅ **Prevents OOM**: Memory limits prevent out-of-memory conditions
+- ✅ **CPU Protection**: CPU limits prevent CPU starvation
+- ✅ **Predictable Performance**: Resource reservations ensure baseline performance
+- ✅ **Container Stability**: Improved overall system stability
+
+### 📋 Server Management & Debugging
+
+**Server Status Monitoring**:
 ```bash
 # List all configured MCP servers and their status
-curl http://localhost:8080/listmcp
-# Response: {"count":1,"servers":[{"name":"notionApi","running":true,"pid":11,"command":"npx","args":["-y","@notionhq/notion-mcp-server"]}]}
-```
+curl https://mcp.your-domain.com/listmcp
+# Response: {
+#   "count": 4,
+#   "servers": [
+#     {
+#       "name": "memory",
+#       "running": true,
+#       "pid": 123,
+#       "command": "npx",
+#       "args": ["-y", "@modelcontextprotocol/server-memory"]
+#     }
+#   ]
+# }
 
-### List Tools for an MCP Server
-```bash
 # List available tools for a specific MCP server
-curl http://localhost:8080/listtools/{server-name}
-# Example: curl http://localhost:8080/listtools/notionApi
-# Response: {"server":"notionApi","response":{"id":"...","jsonrpc":"2.0","result":{"tools":[...]}}}
+curl https://mcp.your-domain.com/listtools/memory
+# Response: {
+#   "server": "memory",
+#   "response": {
+#     "jsonrpc": "2.0",
+#     "result": {
+#       "tools": [
+#         {
+#           "name": "create_entities",
+#           "description": "Create multiple new entities in the knowledge graph"
+#         }
+#       ]
+#     }
+#   }
+# }
+
+# Manual connection cleanup (if needed)
+curl -X POST https://mcp.your-domain.com/cleanup
 ```
 
-These endpoints are useful for:
-- **Health monitoring**: Verify the proxy is running
-- **Configuration debugging**: Check which MCP servers are configured and running
-- **Tool discovery**: See what tools are available from each MCP server
-- **Troubleshooting**: Identify if MCP servers are properly started and responding
+### 🔧 Enhanced Logging & Debugging
+
+**Structured Logging**: All logs include session correlation for better debugging.
+
+**Log Locations** (with volume mount `/logs`):
+- 📄 **System Logs**: `/logs/system.log` - Proxy operations and health monitoring
+- 📄 **MCP Server Logs**: `/logs/mcp-{server-name}.log` - Individual server logs
+- 📄 **Log Retention**: Configurable cleanup (default: 24h system, 12h MCP)
+
+**Log Levels** (configured via environment variables):
+```bash
+# .env configuration
+LOG_LEVEL_SYSTEM=INFO      # System logging level
+LOG_LEVEL_MCP=DEBUG        # MCP server logging level
+LOG_RETENTION_SYSTEM=24h   # System log retention
+LOG_RETENTION_MCP=12h      # MCP log retention
+```
+
+**Enhanced Request Tracing**: Every request includes Method, ID, and SessionID for complete traceability:
+```
+2025/06/26 10:30:15 [INFO] Method: initialize, ID: 0, SessionID: abc123-def456
+2025/06/26 10:30:16 [INFO] Successfully received response from server memory
+```
+
+### 🚀 Production Monitoring Setup
+
+**External Monitoring Integration**: Use the health APIs with your monitoring stack.
+
+**Prometheus/Grafana Example**:
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'mcp-proxy'
+    static_configs:
+      - targets: ['mcp.your-domain.com']
+    metrics_path: '/health/resources'
+    scheme: https
+```
+
+**Uptime Monitoring**:
+```bash
+# Health check endpoint for uptime monitors
+https://mcp.your-domain.com/health
+
+# Expected response: {"status":"healthy"}
+```
+
+**Alert Rules Examples**:
+- Server health: Check `/health/servers` for unhealthy status
+- Resource usage: Monitor `/health/resources` for threshold violations
+- Process count: Alert if fewer processes than expected servers
+
+### 🛠️ Troubleshooting with New Features
+
+**Memory Server Hanging Issues** (Addressed in latest version):
+1. **Check Health Status**: `curl https://mcp.your-domain.com/health/servers`
+2. **Review Resource Usage**: `curl https://mcp.your-domain.com/health/resources`
+3. **Monitor Auto-Recovery**: Health checker will automatically restart hung servers
+4. **Check Logs**: Review `/logs/mcp-memory.log` for detailed error analysis
+
+**Resource Exhaustion Prevention**:
+- Container limits prevent runaway processes
+- Resource monitoring provides early warning
+- Automatic cleanup of old log files prevents disk issues
+
+These monitoring features provide comprehensive visibility into MCP server health and performance, with automatic recovery capabilities to ensure reliable operation in production environments.
 
 ## Troubleshooting
 

@@ -27,7 +27,7 @@ func TestSubdomainMiddleware(t *testing.T) {
 
 	// Create test server
 	manager := mcp.NewManager(cfg.MCPServers)
-	server := NewServerWithConfig(manager, cfg)
+	server := NewServerWithConfig(manager, cfg, nil, nil)
 
 	tests := []struct {
 		name           string
@@ -124,7 +124,7 @@ func TestSubdomainRouting(t *testing.T) {
 
 	// Create test server
 	manager := mcp.NewManager(cfg.MCPServers)
-	server := NewServerWithConfig(manager, cfg)
+	server := NewServerWithConfig(manager, cfg, nil, nil)
 	router := server.Router()
 
 	tests := []struct {

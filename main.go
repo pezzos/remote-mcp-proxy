@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"remote-mcp-proxy/config"
+	"remote-mcp-proxy/health"
 	"remote-mcp-proxy/logger"
 	"remote-mcp-proxy/mcp"
+	"remote-mcp-proxy/monitoring"
 	"remote-mcp-proxy/proxy"
 )
 
@@ -42,8 +44,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize health checker and resource monitor
+	healthChecker := health.NewHealthChecker(mcpManager)
+	resourceMonitor := monitoring.NewResourceMonitor()
+
+	// Start monitoring services
+	healthChecker.Start()
+	resourceMonitor.Start()
+	sysLog.Info("Health checker and resource monitor started")
+
 	// Create proxy server with configuration
-	proxyServer := proxy.NewServerWithConfig(mcpManager, cfg)
+	proxyServer := proxy.NewServerWithConfig(mcpManager, cfg, healthChecker, resourceMonitor)
 
 	// Start HTTP server on configured port
 	addr := ":" + cfg.GetPort()
@@ -75,6 +86,11 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		sysLog.Warn("Server forced to shutdown: %v", err)
 	}
+
+	// Stop monitoring services
+	healthChecker.Stop()
+	resourceMonitor.Stop()
+	sysLog.Info("Monitoring services stopped")
 
 	// Stop MCP servers
 	mcpManager.StopAll()

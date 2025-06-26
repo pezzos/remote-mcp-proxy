@@ -43,14 +43,18 @@ func ParseLogLevel(level string) LogLevel {
 }
 
 type Logger struct {
-	level         LogLevel
-	logger        *log.Logger
-	file          *os.File
-	filename      string
-	retention     time.Duration
-	mu            sync.Mutex
-	cleanupTicker *time.Ticker
-	stopCleanup   chan bool
+	level              LogLevel
+	logger             *log.Logger
+	file               *os.File
+	filename           string
+	retention          time.Duration
+	mu                 sync.Mutex
+	cleanupTicker      *time.Ticker
+	stopCleanup        chan bool
+	lastLogTime        time.Time
+	logDate            string
+	healthCheckCounter int
+	lastHealthLog      time.Time
 }
 
 type Config struct {
@@ -66,7 +70,11 @@ func New(config Config) (*Logger, error) {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 
-	file, err := os.OpenFile(config.Filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	// Add date to filename to reduce redundancy in log lines
+	now := time.Now()
+	datedFilename := addDateToFilename(config.Filename, now)
+
+	file, err := os.OpenFile(datedFilename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
@@ -74,14 +82,22 @@ func New(config Config) (*Logger, error) {
 	// Create multi-writer to write to both file and stdout
 	multiWriter := io.MultiWriter(file, os.Stdout)
 
+	// Use shorter timestamp format (only time, not date)
 	logger := &Logger{
-		level:       config.Level,
-		logger:      log.New(multiWriter, "", log.LstdFlags|log.Lmicroseconds),
-		file:        file,
-		filename:    config.Filename,
-		retention:   config.Retention,
-		stopCleanup: make(chan bool),
+		level:              config.Level,
+		logger:             log.New(multiWriter, "", log.Ltime|log.Lmicroseconds),
+		file:               file,
+		filename:           datedFilename,
+		retention:          config.Retention,
+		stopCleanup:        make(chan bool),
+		lastLogTime:        now,
+		logDate:            now.Format("2006-01-02"),
+		healthCheckCounter: 0,
+		lastHealthLog:      time.Time{},
 	}
+
+	// Log startup message with date context
+	logger.logger.Printf("[INFO] === LOG SESSION START %s ===", now.Format("2006-01-02 15:04:05"))
 
 	// Start cleanup routine
 	logger.startCleanup()
@@ -108,9 +124,24 @@ func (l *Logger) log(level LogLevel, format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	prefix := fmt.Sprintf("[%s] ", level.String())
+	// Smart content-based log level detection
 	message := fmt.Sprintf(format, args...)
+	adjustedLevel := l.detectLogLevel(message, level)
+
+	// Health check summarization to reduce token usage
+	if l.isHealthCheck(message) {
+		if l.shouldSkipHealthLog() {
+			return
+		}
+		message = l.summarizeHealthCheck(message)
+	}
+
+	// Remove redundant prefixes (INFO: INFO becomes just INFO)
+	message = l.cleanMessage(message)
+
+	prefix := fmt.Sprintf("[%s] ", adjustedLevel.String())
 	l.logger.Print(prefix + message)
+	l.lastLogTime = time.Now()
 }
 
 func (l *Logger) Trace(format string, args ...interface{}) {
@@ -197,6 +228,100 @@ func (l *Logger) cleanupOldLogs() {
 			}
 		}
 	}
+}
+
+// addDateToFilename adds current date to filename for organization
+func addDateToFilename(filename string, t time.Time) string {
+	ext := filepath.Ext(filename)
+	base := strings.TrimSuffix(filename, ext)
+	date := t.Format("2006-01-02")
+	return fmt.Sprintf("%s-%s%s", base, date, ext)
+}
+
+// detectLogLevel analyzes message content to determine appropriate log level
+func (l *Logger) detectLogLevel(message string, originalLevel LogLevel) LogLevel {
+	lowerMsg := strings.ToLower(message)
+
+	// Detect error content in INFO logs
+	if originalLevel == INFO && (strings.Contains(lowerMsg, "error:") ||
+		strings.Contains(lowerMsg, "failed") ||
+		strings.Contains(lowerMsg, "timeout") ||
+		strings.Contains(lowerMsg, "cancelled") ||
+		strings.Contains(lowerMsg, "context deadline exceeded")) {
+		return ERROR
+	}
+
+	// Detect warn content in INFO logs
+	if originalLevel == INFO && (strings.Contains(lowerMsg, "warn") ||
+		strings.Contains(lowerMsg, "deprecated") ||
+		strings.Contains(lowerMsg, "method not found")) {
+		return WARN
+	}
+
+	return originalLevel
+}
+
+// isHealthCheck determines if a message is related to health checking
+func (l *Logger) isHealthCheck(message string) bool {
+	return strings.Contains(message, "health_check") ||
+		strings.Contains(message, "ping") ||
+		strings.Contains(message, "=== MCP SEND AND RECEIVE") && strings.Contains(message, "health")
+}
+
+// shouldSkipHealthLog implements health check log summarization
+func (l *Logger) shouldSkipHealthLog() bool {
+	now := time.Now()
+
+	// Skip detailed health logs if we've seen too many recently
+	if now.Sub(l.lastHealthLog) < 5*time.Minute {
+		l.healthCheckCounter++
+		// After first 3 health checks in 5 minutes, only log every 10th
+		if l.healthCheckCounter > 3 && l.healthCheckCounter%10 != 0 {
+			return true
+		}
+	} else {
+		// Reset counter after 5 minutes of silence
+		l.healthCheckCounter = 0
+	}
+
+	l.lastHealthLog = now
+	return false
+}
+
+// summarizeHealthCheck creates concise health check summaries
+func (l *Logger) summarizeHealthCheck(message string) string {
+	if l.healthCheckCounter > 3 {
+		return fmt.Sprintf("Health check summary: %d checks completed (latest: %s)",
+			l.healthCheckCounter, time.Now().Format("15:04:05"))
+	}
+	return message
+}
+
+// cleanMessage removes redundant prefixes and cleans up formatting
+func (l *Logger) cleanMessage(message string) string {
+	// Remove double INFO prefixes: "INFO: INFO" -> "INFO"
+	message = strings.ReplaceAll(message, "INFO: INFO", "INFO")
+	message = strings.ReplaceAll(message, "ERROR: ERROR", "ERROR")
+	message = strings.ReplaceAll(message, "WARN: WARN", "WARN")
+	message = strings.ReplaceAll(message, "DEBUG: DEBUG", "DEBUG")
+
+	// Simplify repetitive boundary markers
+	message = strings.ReplaceAll(message, "=== MCP SEND AND RECEIVE START (Server: ", ">>> ")
+	message = strings.ReplaceAll(message, "=== MCP SEND AND RECEIVE END (Server: ", "<<< ")
+	message = strings.ReplaceAll(message, ") - SUCCESS ===", " OK")
+	message = strings.ReplaceAll(message, ") ===", "")
+
+	// Truncate very long JSON in messages (keep first 100 chars)
+	if len(message) > 200 && strings.Contains(message, "{") {
+		if idx := strings.Index(message, "{"); idx != -1 {
+			jsonPart := message[idx:]
+			if len(jsonPart) > 100 {
+				message = message[:idx] + jsonPart[:100] + "...}"
+			}
+		}
+	}
+
+	return message
 }
 
 // ParseDuration parses duration strings like "3h", "24h", "7d"
