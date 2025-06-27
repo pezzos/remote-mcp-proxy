@@ -35,6 +35,7 @@ type Server struct {
 type ConnectionManager struct {
 	connections    map[string]*ConnectionInfo
 	maxConnections int
+	mcpManager     *mcp.Manager // Reference to MCP manager for operation-aware cleanup
 	mu             sync.RWMutex
 }
 
@@ -48,10 +49,11 @@ type ConnectionInfo struct {
 }
 
 // NewConnectionManager creates a new connection manager
-func NewConnectionManager(maxConnections int) *ConnectionManager {
+func NewConnectionManager(maxConnections int, mcpManager *mcp.Manager) *ConnectionManager {
 	return &ConnectionManager{
 		connections:    make(map[string]*ConnectionInfo),
 		maxConnections: maxConnections,
+		mcpManager:     mcpManager,
 	}
 }
 
@@ -116,25 +118,64 @@ func (cm *ConnectionManager) GetConnections() map[string]*ConnectionInfo {
 }
 
 // CleanupStaleConnections removes connections that have been inactive for too long
+// OPERATION-AWARE CLEANUP: Respects active operations and server-specific timeouts
 func (cm *ConnectionManager) CleanupStaleConnections(maxAge time.Duration) {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 
 	now := time.Now()
 	var removed []string
+	var protected []string
 
 	for sessionID, conn := range cm.connections {
-		if now.Sub(conn.ConnectedAt) > maxAge {
-			if conn.Cancel != nil {
-				conn.Cancel()
-			}
-			delete(cm.connections, sessionID)
-			removed = append(removed, sessionID)
+		connectionAge := now.Sub(conn.ConnectedAt)
+
+		// Basic age check - if connection is newer than maxAge, skip
+		if connectionAge <= maxAge {
+			continue
 		}
+
+		// OPERATION-AWARE LOGIC: Check if associated MCP servers have active operations
+		shouldProtect := false
+		if cm.mcpManager != nil {
+			// Get all servers for this session
+			sessionServers := cm.mcpManager.GetSessionServerMap(sessionID)
+
+			for serverName, server := range sessionServers {
+				if server.HasActiveOperations() {
+					// Check if operations are within server-specific timeout
+					if !server.IsOperationExpired() {
+						shouldProtect = true
+						protected = append(protected, fmt.Sprintf("%s:%s", sessionID[:8], serverName))
+						break
+					} else {
+						// Operations have expired, allow cleanup but log warning
+						logger.System().Warn("OPERATION TIMEOUT: Server %s operations exceeded %d seconds, allowing cleanup",
+							serverName, server.GetOperationTimeoutSec())
+					}
+				}
+			}
+		}
+
+		// Protect connections with active operations
+		if shouldProtect {
+			logger.System().Debug("OPERATION PROTECTION: Preserving connection %s with active operations", sessionID[:8])
+			continue
+		}
+
+		// Safe to remove - no active operations or operations have expired
+		if conn.Cancel != nil {
+			conn.Cancel()
+		}
+		delete(cm.connections, sessionID)
+		removed = append(removed, sessionID[:8])
 	}
 
 	if len(removed) > 0 {
 		logger.System().Info("Cleaned up %d stale connections: %v", len(removed), removed)
+	}
+	if len(protected) > 0 {
+		logger.System().Info("Protected %d connections with active operations: %v", len(protected), protected)
 	}
 }
 
@@ -150,7 +191,7 @@ func NewServerWithConfig(mcpManager *mcp.Manager, cfg *config.Config, healthChec
 	server := &Server{
 		mcpManager:        mcpManager,
 		translator:        protocol.NewTranslator(),
-		connectionManager: NewConnectionManager(maxConnections),
+		connectionManager: NewConnectionManager(maxConnections, mcpManager),
 		config:            cfg,
 		healthChecker:     healthChecker,
 		resourceMonitor:   resourceMonitor,
@@ -1339,6 +1380,23 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 
 	logger.System().Info("INFO: Handling session request %s synchronously", jsonrpcMsg.Method)
 
+	// CRITICAL FIX: Convert Remote MCP format to standard JSON-RPC format
+	//
+	// The session endpoint receives messages in Remote MCP format from Claude.ai,
+	// but MCP servers expect standard JSON-RPC format. This includes handling
+	// tool name normalization where Claude.ai sends "Memory:create_entities"
+	// but the server expects "create_entities".
+	//
+	// Without this conversion, all tool calls result in "Method not found" errors
+	// because the namespace prefixes are never stripped.
+	mcpRequestBytes, err := s.translator.RemoteToMCP(body)
+	if err != nil {
+		logger.System().Error(" Failed to convert Remote MCP to MCP format: %v", err)
+		http.Error(w, "Failed to process request", http.StatusBadRequest)
+		return
+	}
+	logger.System().Debug("Converted request to MCP format: %s", string(mcpRequestBytes))
+
 	// Send request and receive response from MCP server using serialized queue
 	//
 	// INVESTIGATION FIX: Increased timeout from 30s to 2 minutes for tools/call operations
@@ -1358,7 +1416,7 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	responseBytes, err := mcpServer.SendAndReceive(ctx, body)
+	responseBytes, err := mcpServer.SendAndReceive(ctx, mcpRequestBytes)
 	if err != nil {
 		logger.System().Error(" Failed to send/receive message to MCP server %s: %v", serverName, err)
 		http.Error(w, "Failed to communicate with MCP server", http.StatusInternalServerError)
@@ -1382,12 +1440,24 @@ func (s *Server) handleSessionMessage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// CRITICAL FIX: Convert MCP response back to Remote MCP format
+	//
+	// The MCP server returns standard JSON-RPC format, but Claude.ai expects
+	// Remote MCP format. This conversion ensures proper protocol compliance.
+	remoteMCPResponse, err := s.translator.MCPToRemote(responseBytes)
+	if err != nil {
+		logger.System().Error(" Failed to convert MCP to Remote MCP format: %v", err)
+		http.Error(w, "Failed to process response", http.StatusInternalServerError)
+		return
+	}
+	logger.System().Debug("Converted response to Remote MCP format: %s", string(remoteMCPResponse))
+
 	// Return response directly to Claude.ai
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Mcp-Session-Id", sessionID)
 	w.WriteHeader(http.StatusOK)
 
-	if _, err := w.Write(responseBytes); err != nil {
+	if _, err := w.Write(remoteMCPResponse); err != nil {
 		logger.System().Error(" Failed to write session response: %v", err)
 	} else {
 		logger.System().Info("INFO: Successfully returned synchronous response for %s to session %s", jsonrpcMsg.Method, sessionID)

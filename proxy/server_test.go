@@ -300,7 +300,7 @@ func TestHandshakeMessages(t *testing.T) {
 
 func TestConnectionManager(t *testing.T) {
 	// Test connection manager directly
-	cm := NewConnectionManager(3) // Max 3 connections
+	cm := NewConnectionManager(3, nil) // Max 3 connections, no MCP manager for test
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -372,7 +372,7 @@ func TestConnectionManager(t *testing.T) {
 }
 
 func TestConnectionCleanup(t *testing.T) {
-	cm := NewConnectionManager(10)
+	cm := NewConnectionManager(10, nil)
 
 	// Add a connection that's "old"
 	ctx, cancel := context.WithCancel(context.Background())
@@ -509,7 +509,7 @@ func TestErrorResponse(t *testing.T) {
 }
 
 func TestConcurrentConnections(t *testing.T) {
-	cm := NewConnectionManager(5)
+	cm := NewConnectionManager(5, nil)
 
 	// Test concurrent connection additions
 	const numGoroutines = 10

@@ -3,6 +3,7 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +28,15 @@ type RequestResponse struct {
 type RequestResult struct {
 	Response []byte
 	Error    error
+}
+
+// OperationInfo tracks information about active MCP operations
+type OperationInfo struct {
+	RequestID string    // Unique identifier for the request
+	Method    string    // MCP method being executed (e.g., "tools/call")
+	StartTime time.Time // When the operation started
+	SessionID string    // Session that initiated the operation
+	ToolName  string    // Name of tool being called (for tools/call operations)
 }
 
 // Server represents a running MCP server process
@@ -63,6 +73,16 @@ type Server struct {
 	// Each request gets a dedicated response channel to ensure proper correlation.
 	requestQueue chan RequestResponse
 	queueStarted bool
+
+	// OPERATION TRACKING: Track active operations to prevent premature server termination
+	//
+	// These fields enable operation-aware cleanup that respects long-running operations
+	// like Sequential Thinking's multi-thought processes. Servers with active operations
+	// will not be terminated during session cleanup.
+	activeOperations    map[string]*OperationInfo // requestID -> operation info
+	operationsMu        sync.RWMutex              // Protects activeOperations map
+	lastOperationTime   time.Time                 // Last time an operation started
+	operationTimeoutSec int                       // Server-specific operation timeout
 }
 
 // Manager manages multiple MCP server processes
@@ -96,12 +116,20 @@ func NewManager(configs map[string]config.MCPServer) *Manager {
 			mcpLogger = logger.System()
 		}
 
+		// Set reasonable default operation timeout for all MCP servers
+		// Since we have real-time operation monitoring and intelligent cleanup
+		// that protects active operations, we only need a timeout for truly stuck operations
+		operationTimeout := 300 // 5 minutes default - reasonable for any MCP operation
+
 		m.servers[name] = &Server{
-			Name:         name,
-			Config:       cfg,
-			requestQueue: make(chan RequestResponse, 100), // Buffer for concurrent requests
-			queueStarted: false,
-			logger:       mcpLogger,
+			Name:                name,
+			Config:              cfg,
+			requestQueue:        make(chan RequestResponse, 100), // Buffer for concurrent requests
+			queueStarted:        false,
+			logger:              mcpLogger,
+			activeOperations:    make(map[string]*OperationInfo),
+			lastOperationTime:   time.Time{}, // Zero time initially
+			operationTimeoutSec: operationTimeout,
 		}
 	}
 
@@ -368,6 +396,24 @@ func (m *Manager) GetSessionServers(sessionID string) []ServerStatus {
 	}
 
 	return statuses
+}
+
+// GetSessionServerMap returns the actual server objects for a session (for operation tracking)
+func (m *Manager) GetSessionServerMap(sessionID string) map[string]*Server {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	sessionMap, exists := m.sessionServers[sessionID]
+	if !exists {
+		return make(map[string]*Server)
+	}
+
+	// Return a copy of the map to avoid concurrent access issues
+	result := make(map[string]*Server)
+	for name, server := range sessionMap {
+		result[name] = server
+	}
+	return result
 }
 
 // ServerStatus represents the status of an MCP server
@@ -660,7 +706,12 @@ func (s *Server) sendMessageDirect(message []byte) error {
 
 // SendAndReceive sends a request and waits for the response using the serialized queue
 func (s *Server) SendAndReceive(ctx context.Context, message []byte) ([]byte, error) {
-	// Removed redundant server name logging - server context already available in MCP logs
+	// OPERATION TRACKING: Parse request to extract operation information
+	operationInfo := s.parseOperationInfo(message, ctx)
+	if operationInfo != nil {
+		s.startOperation(operationInfo)
+		defer s.endOperation(operationInfo.RequestID)
+	}
 
 	// Create response channel
 	responseCh := make(chan RequestResult, 1)
@@ -695,6 +746,114 @@ func (s *Server) SendAndReceive(ctx context.Context, message []byte) ([]byte, er
 		s.logger.Error("Context cancelled while waiting for response from server %s", s.Name)
 		return nil, ctx.Err()
 	}
+}
+
+// parseOperationInfo extracts operation information from a JSON-RPC request
+func (s *Server) parseOperationInfo(message []byte, ctx context.Context) *OperationInfo {
+	var jsonrpcMsg map[string]interface{}
+	if err := json.Unmarshal(message, &jsonrpcMsg); err != nil {
+		return nil // Not a valid JSON-RPC message, skip tracking
+	}
+
+	method, ok := jsonrpcMsg["method"].(string)
+	if !ok {
+		return nil // No method field, skip tracking
+	}
+
+	requestID, ok := jsonrpcMsg["id"]
+	if !ok {
+		return nil // No request ID, skip tracking
+	}
+
+	// Generate unique operation ID
+	opID := fmt.Sprintf("%s-%v-%d", s.Name, requestID, time.Now().UnixNano())
+
+	// Extract session ID from context if available
+	sessionID := ""
+	if session := ctx.Value("sessionID"); session != nil {
+		if sessionStr, ok := session.(string); ok {
+			sessionID = sessionStr
+		}
+	}
+
+	// Extract tool name for tools/call operations
+	toolName := ""
+	if method == "tools/call" {
+		if params, ok := jsonrpcMsg["params"].(map[string]interface{}); ok {
+			if name, ok := params["name"].(string); ok {
+				toolName = name
+			}
+		}
+	}
+
+	return &OperationInfo{
+		RequestID: opID,
+		Method:    method,
+		StartTime: time.Now(),
+		SessionID: sessionID,
+		ToolName:  toolName,
+	}
+}
+
+// startOperation registers the start of an operation
+func (s *Server) startOperation(info *OperationInfo) {
+	s.operationsMu.Lock()
+	defer s.operationsMu.Unlock()
+
+	s.activeOperations[info.RequestID] = info
+	s.lastOperationTime = info.StartTime
+
+	s.logger.Info("OPERATION START: %s %s (tool: %s) on server %s",
+		info.Method, info.RequestID[:8], info.ToolName, s.Name)
+}
+
+// endOperation marks an operation as completed
+func (s *Server) endOperation(requestID string) {
+	s.operationsMu.Lock()
+	defer s.operationsMu.Unlock()
+
+	if info, exists := s.activeOperations[requestID]; exists {
+		duration := time.Since(info.StartTime)
+		delete(s.activeOperations, requestID)
+
+		s.logger.Info("OPERATION END: %s %s completed in %v on server %s",
+			info.Method, requestID[:8], duration, s.Name)
+	}
+}
+
+// HasActiveOperations returns true if the server has any active operations
+func (s *Server) HasActiveOperations() bool {
+	s.operationsMu.RLock()
+	defer s.operationsMu.RUnlock()
+	return len(s.activeOperations) > 0
+}
+
+// GetActiveOperationCount returns the number of active operations
+func (s *Server) GetActiveOperationCount() int {
+	s.operationsMu.RLock()
+	defer s.operationsMu.RUnlock()
+	return len(s.activeOperations)
+}
+
+// IsOperationExpired checks if any operation has exceeded the server's timeout
+func (s *Server) IsOperationExpired() bool {
+	s.operationsMu.RLock()
+	defer s.operationsMu.RUnlock()
+
+	timeout := time.Duration(s.operationTimeoutSec) * time.Second
+	now := time.Now()
+
+	for _, info := range s.activeOperations {
+		if now.Sub(info.StartTime) > timeout {
+			return true
+		}
+	}
+	return false
+}
+
+// GetOperationTimeoutSec returns the server's operation timeout in seconds
+func (s *Server) GetOperationTimeoutSec() int {
+	return s.operationTimeoutSec
 }
 
 // SendMessage sends a JSON-RPC message to the MCP server using the request queue

@@ -98,6 +98,47 @@ The issue was **self-resolved** by container restart which:
 ### Preventive Measures 🛡️
 To prevent future occurrences:
 
+### Data Persistence Issue Analysis ⚠️
+**Critical Finding**: Server restart cycle causes data loss in Memory MCP server
+- **Evidence**: PIDs change after each restart (PID 57 → 202-235 → 309-320 → 57)
+- **Impact**: All stored entities and knowledge graph data lost on restart
+- **Timeline**: Multiple restart cycles observed at 20:06, 20:14, 20:16, 20:17
+- **Root Cause**: Memory server's data persistence relies on process continuity
+
+**Data Loss Pattern**:
+1. **Initial State**: Memory server starts with PID 57, loads existing data
+2. **Stress Test**: Multiple concurrent connections cause server instability
+3. **Force Kill**: Server gets SIGKILL due to unresponsive state
+4. **Data Reset**: New process starts with empty knowledge graph
+5. **User Impact**: All previous conversation context and entities lost
+
+**Storage Configuration Issue**:
+- Memory server configured with `MEMORY_FILE_PATH: "/app/sessions/{SESSION_ID}/data/memory.json"`
+- File-based persistence should survive restart, but connection state does not
+- Session management may not properly restore previous data on reconnection
+
+### Graceful Shutdown Improvements Needed 🔄
+**Current Shutdown Process**:
+```
+20:17:26.503 [INFO] Stopping MCP server: memory-e20e19aa
+20:17:26.503 [DEBUG] Closed stdin/stdout for server
+20:17:36.511 [WARN] Force killing MCP server after timeout
+20:17:36.511 [ERROR] Failed to kill process: os: process already finished
+20:17:38.512 [ERROR] Server did not respond to SIGKILL
+```
+
+**Issues Identified**:
+1. **10-second timeout insufficient** for Memory server to save state
+2. **Force kill prevents clean shutdown** - data may not be persisted
+3. **Process already finished** errors indicate race conditions in shutdown
+4. **No graceful save mechanism** for in-memory data structures
+
+**Recommended Improvements**:
+- Increase graceful shutdown timeout from 10s to 30s for Memory server
+- Implement explicit save/flush commands before SIGTERM
+- Add process state verification before force kill attempts
+- Enhance session restoration to reload persisted data on restart
+
 1. **Monitor MCP Server Health**: Implement health checks for individual MCP servers
 2. **Increase Timeout for Heavy Servers**: Consider longer timeouts for memory server initialization  
 3. **Graceful Degradation**: Implement fallback when one server fails during dual-server ops

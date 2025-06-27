@@ -484,7 +484,7 @@ func TestConnectionLimitIntegration(t *testing.T) {
 
 	// Test connection manager limits
 	t.Run("connection_limits", func(t *testing.T) {
-		cm := proxy.NewConnectionManager(2) // Very low limit for testing
+		cm := proxy.NewConnectionManager(2, nil) // Very low limit for testing, no MCP manager
 
 		ctx1, cancel1 := context.WithCancel(context.Background())
 		ctx2, cancel2 := context.WithCancel(context.Background())
