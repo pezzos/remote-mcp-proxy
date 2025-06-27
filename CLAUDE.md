@@ -22,15 +22,72 @@ Complete documentation is organized in the `docs/` directory:
 - **Lint**: `go fmt ./...` and `go vet ./...`
 - **Docker Build**: `docker build -t remote-mcp-proxy .`
 
-## Investigation Command
+## AI-Augmented Project Workflow Commands
 
-### `/investigate` - Systematic Problem Analysis
+### Project Workflow Commands
+
+#### `/project:describe` - Initial Project Description
+Analyze and structure project/feature description: $ARGUMENTS
+
+**Structure:**
+1. **Objective**: Clear and measurable goal
+2. **Context**: Environment and constraints
+3. **Users**: Personas and needs
+4. **Success Criteria**: Metrics and KPIs
+5. **Risks**: Identification and mitigation
+
+Produces structured document for validation.
+
+#### `/project:brainstorm` - Challenged Brainstorming
+Explore the problem: $ARGUMENTS
+
+**Process:**
+1. Generate 5 different approaches
+2. For each approach:
+   - Advantages and disadvantages
+   - Technical feasibility
+   - Architecture impact
+3. Challenging questions:
+   - "What if we inverted the problem?"
+   - "What would be the simplest solution?"
+   - "How would this approach fail?"
+4. Final recommendation with justification
+
+#### `/project:plan` - Step Planning
+Create detailed implementation plan for: $ARGUMENTS
+
+**Structure:**
+1. **Phases**: Logical phase breakdown
+2. **Milestones**: Validation points
+3. **Dependencies**: Identification and management
+4. **Estimation**: Time per phase
+5. **Risks**: Per phase with mitigation
+
+Format: Executable plan with checkpoints.
+
+#### `/project:implement` - Iterative Implementation
+Implement task: $ARGUMENTS
+
+**Iterative Cycle:**
+1. **Analysis**: Understand context
+2. **Design**: Design solution
+3. **Code**: Implement with best practices
+4. **Test**: Unit and integration tests
+5. **Review**: Critical self-review
+6. **Documentation**: Inline and README
+7. **Validation**: Acceptance criteria
+
+Repeat until complete satisfaction.
+
+### Investigation and Reflection Commands
+
+#### `/investigate` - Systematic Problem Analysis
 
 **Purpose**: Launch systematic investigation mode for complex technical issues requiring methodical analysis and documentation.
 
 **Usage**: `/investigate [problem-description]`
 
-### `/reflect` - Session Documentation and Knowledge Preservation
+#### `/reflect` - Session Documentation and Knowledge Preservation
 
 **Purpose**: Document session achievements, solutions implemented, and lessons learned for future reference and knowledge preservation.
 
@@ -551,6 +608,170 @@ Service expects `/app/config.json` with same format as `claude_desktop_config.js
     }
   }
 }
+```
+
+## AI-Augmented Development Methodology
+
+### Agile Framework for AI Development
+
+#### Complete User Story Template
+```markdown
+## Story: [TITLE]
+**As a** [user]
+**I want** [functionality]  
+**So that** [benefit]
+
+### Technical Context
+- Stack: [technologies]
+- Dependencies: [services/APIs]
+- Constraints: [performance/security]
+
+### Development Tasks
+- [ ] Backend: API endpoint
+- [ ] Frontend: User interface
+- [ ] Tests: Unit + E2E
+- [ ] Documentation: API + User guide
+- [ ] Deployment: Staging + Production
+
+### Acceptance Criteria
+- [ ] Complete functionality
+- [ ] Passing tests (>80% coverage)
+- [ ] Performance <200ms
+- [ ] Updated documentation
+```
+
+#### AI-Augmented Scrum Framework
+
+**Sprint Planning Assisted:**
+- Automatic estimation based on history
+- Intelligent assignment by skills
+- Conflict and dependency detection
+- AI-optimized load balancing
+
+**Augmented Daily Stand-ups:**
+```markdown
+# Daily AI Report
+## Automatic Progression
+- Commits: [change analysis]
+- Tests: [status and coverage]
+- Blockers: [proactive detection]
+
+## Suggested Actions
+- Priority 1: [critical task]
+- Optimization: [performance suggestion]
+- Collaboration: [help needed on X]
+```
+
+**Intelligent Retrospectives:**
+- Velocity analysis with trends
+- Recurring pattern identification
+- Data-based improvement suggestions
+- Future sprint predictions
+
+**AI-Specific KPIs:**
+- Time saved through automation
+- Generated vs manual code quality
+- AI suggestion adoption rate
+- ROI of AI tools
+
+### Complete Cycle Best Practices
+
+#### Clear AI Description Framework (ACDC):
+```markdown
+**Architecture:** [technical stack, patterns]
+**Constraints:** [time, budget, compliance]
+**Data:** [sources, formats, volumes]
+**Criteria:** [success metrics, KPIs]
+```
+
+#### Effective Brainstorming - Six Thinking Hats:
+- **Factual (white)**: Objective data
+- **Emotional (red)**: Intuitions
+- **Critical (black)**: Risks and problems
+- **Optimistic (yellow)**: Benefits
+- **Creative (green)**: Alternatives
+- **Process (blue)**: Organization
+
+#### Structured Implementation
+**Atomic Task Decomposition:**
+- Maximum 4h per task
+- Independently testable
+- Single owner
+- Clear validation criteria
+
+#### Testing Strategy - Test Pyramid:
+```
+         /\
+        /E2E\      (10%)
+       /------\
+      /Integr. \   (20%)
+     /----------\
+    / Unitaires  \ (70%)
+   /--------------\
+```
+
+#### Automated Documentation - ADR Template:
+```markdown
+# ADR-[NUM]: [Decision]
+
+## Context
+[Generated by problem analysis]
+
+## Options Evaluated
+1. [Option A] - Pros/Cons
+2. [Option B] - Pros/Cons  
+3. [Option C] - Pros/Cons
+
+## Decision
+[Chosen option + justification]
+
+## Consequences
+- Positive: [list]
+- Negative: [list + mitigation]
+```
+
+#### Commit Management - Conventional Commits:
+```bash
+feat(payment): add Stripe integration
+fix(auth): resolve token refresh issue
+docs(api): update endpoint documentation
+refactor(user): simplify validation logic
+test(cart): add edge case scenarios
+```
+
+### Complete Workflow Example
+
+**Phase 1: Description and Analysis**
+```bash
+/project:describe "Real-time notification system"
+# → Produces complete specification
+```
+
+**Phase 2: Brainstorming**
+```bash
+/project:brainstorm "notifications with 10k simultaneous users"
+# → Explores WebSockets, SSE, Polling, Message Queue
+```
+
+**Phase 3: Planning**
+```bash
+/project:plan "implement WebSocket + Redis PubSub"
+# → 5-phase plan with milestones
+```
+
+**Phase 4: Iterative Implementation**
+```bash
+# For each task
+/project:implement "WebSocket server with Socket.io"
+/test "WebSocket unit tests"
+/document "WebSocket API documentation"
+/commit "feat(notif): WebSocket server implementation"
+```
+
+**Phase 5: Validation and Deployment**
+```bash
+/review "verify complete implementation"
+/deploy:staging "deploy to staging"
 ```
 
 For complete development guidelines, implementation standards, testing requirements, and troubleshooting procedures, see the documentation in the `docs/` directory.
