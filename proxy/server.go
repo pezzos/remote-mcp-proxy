@@ -1158,8 +1158,23 @@ func (s *Server) handleInitialize(w http.ResponseWriter, r *http.Request, sessio
 		return
 	}
 
-	// Forward the initialize request to the actual MCP server
-	initRequestBytes, err := json.Marshal(msg)
+	// Ensure clientInfo is present for MCP server compatibility
+	if params.ClientInfo.Name == "" {
+		params.ClientInfo = protocol.ClientInfo{
+			Name:    "remote-mcp-proxy",
+			Version: "1.0.0",
+		}
+	}
+
+	// Create properly formatted initialize message for MCP server
+	initRequest := protocol.JSONRPCMessage{
+		JSONRPC: "2.0",
+		ID:      msg.ID,
+		Method:  "initialize",
+		Params:  params,
+	}
+
+	initRequestBytes, err := json.Marshal(initRequest)
 	if err != nil {
 		logger.System().Error(" Failed to marshal initialize request: %v", err)
 		s.sendErrorResponse(w, msg.ID, protocol.InternalError, "Failed to process initialize request", false)
