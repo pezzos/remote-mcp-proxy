@@ -20,6 +20,12 @@ docker-compose.yml: config.json docker-compose.yml.template check-deps
 	(which gomplate > /dev/null && gomplate -d config=config.json -f docker-compose.yml.template -o docker-compose.yml) || \
 	(test -x /tmp/gomplate && /tmp/gomplate -d config=config.json -f docker-compose.yml.template -o docker-compose.yml)
 	@echo "Generated docker-compose.yml with MCP servers: $$(jq -r '.mcpServers | keys | join(", ")' config.json)"
+	@if [ -f .env ]; then set -a && . ./.env && set +a; fi && \
+	if [ "$${USE_ONLY_ONE_CONTAINER:-true}" = "true" ]; then \
+		echo "Single-container mode: All MCP servers in one container"; \
+	else \
+		echo "Multi-container mode: One container per MCP server"; \
+	fi
 	@if [ -f .env ] && grep -q "ENABLE_LOCAL_TRAEFIK=true" .env; then \
 		echo "Local Traefik enabled - services will be available at:"; \
 		echo "  - Traefik Dashboard: https://traefik.$${DOMAIN:-example.com}"; \
