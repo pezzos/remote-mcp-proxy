@@ -87,6 +87,28 @@ Repeat until complete satisfaction.
 
 **Usage**: `/investigate [problem-description]`
 
+#### `/mcp:debug` - MCP Server Diagnostic Workflow
+
+**Purpose**: Launch systematic MCP server debugging for protocol compliance, initialization, and tool discovery issues.
+
+**Usage**: `/mcp:debug [server-name] [symptom-description]`
+
+**When to use `/mcp:debug`**:
+- MCP servers start but don't respond to initialize
+- Tool discovery fails after successful connection  
+- Protocol compliance errors (-32601, -32602, -32603)
+- Stdio communication deadlocks or hangs
+- ClientInfo validation failures
+- MCP server process starts but tools never appear in Claude.ai
+
+**MCP Debug Workflow Process**:
+1. **Protocol Validation** - Test MCP server standalone with proper JSON-RPC messages
+2. **Stdio Analysis** - Debug communication between proxy and MCP server processes
+3. **Parameter Compliance** - Verify initialize params include required fields (clientInfo, capabilities)
+4. **Error Pattern Matching** - Cross-reference with known MCP error patterns
+5. **Fix Implementation** - Apply targeted fixes based on root cause analysis
+6. **Integration Testing** - Verify fix resolves issue in full Claude.ai integration
+
 #### `/reflect` - Session Documentation and Knowledge Preservation
 
 **Purpose**: Document session achievements, solutions implemented, and lessons learned for future reference and knowledge preservation.
@@ -222,9 +244,24 @@ Repeat until complete satisfaction.
 # Updates relevant documentation files as needed
 ```
 
+**MCP Debug Examples**:
+```bash
+/mcp:debug memory "server starts but tools never appear in Claude.ai"
+# Sets up MCP debugging todos, tests standalone server
+# Analyzes initialize message compliance and protocol requirements
+# Implements targeted fixes based on root cause analysis
+# Documents solution in INVESTIGATIONS.md
+
+/mcp:debug filesystem "Method not found errors for all tool calls"
+# Systematic analysis of tool name normalization issues
+# Tests prefix stripping in denormalizeToolNames()
+# Verifies parameter handling and tool discovery flow
+```
+
 ### Key Development Rules
 1. **TodoWrite Usage Protocol**:
-   - **REQUIRED for**: Multi-step tasks (3+ steps), architectural changes, debugging complex issues, feature implementations, integration work, investigation workflows
+   - **REQUIRED for**: Multi-step tasks (3+ steps), architectural changes, debugging complex issues, feature implementations, integration work, investigation workflows, MCP server debugging workflows
+   - **MCP Debugging Protocol**: Break MCP debugging into systematic phases (Protocol Test → Communication Analysis → Parameter Validation → Fix Implementation → Integration Testing)
    - **OPTIONAL for**: Single-step tasks, simple file edits, basic queries, straightforward fixes, concurrent tool operations that don't require planning
    - **Balance with Concurrency**: When multiple independent operations can be batched (file reads, parallel searches, multiple bash commands), prioritize concurrent tool usage over TodoWrite planning for efficiency
    - **Examples requiring TodoWrite**: Adding Traefik integration, implementing new MCP servers, fixing multi-component bugs, deployment workflows, systematic investigations
@@ -258,6 +295,11 @@ Repeat until complete satisfaction.
    - **Use Bash docker commands** for: Interactive operations, complex docker-compose workflows, local debugging
    - **Integration workflow**: Use Docker MCP tools in parallel with other debugging tools for comprehensive system analysis
    - **Preferred for investigations**: Docker MCP tools provide cleaner output and better integration with concurrent tool usage patterns
+   - **MCP Debugging with Docker Tools**:
+     - **Concurrent Evidence Gathering**: Use `mcp__docker-mcp__get-logs` alongside `docker exec` commands for comprehensive log analysis
+     - **Container State Verification**: Combine `mcp__docker-mcp__list-containers` with traditional `docker ps` for full system view
+     - **Process Analysis**: Use Docker MCP tools for clean output, traditional commands for interactive debugging
+     - **MCP Server Logs**: Use Docker MCP tools to capture MCP server stdio output during initialization failures
 
 ### MCP Server Debugging Framework
 
@@ -283,6 +325,10 @@ Repeat until complete satisfaction.
     - **Server restarts frequently**: Check resource limits, stdio handling, and graceful shutdown
     - **Protocol probe failures**: Expected for incomplete servers (resources/list, prompts/list)
     - **Initialization timeouts**: Increase timeout limits, check npm package installation issues
+    - **Missing clientInfo (-32603)**: Initialize params missing required clientInfo field - add default clientInfo in proxy
+    - **Protocol version mismatch**: Unsupported protocol version - verify MCPProtocolVersion constant
+    - **Stdio communication failure**: Process running but can't read/write properly - check process status and resource limits
+    - **Parameter validation errors (-32602)**: Invalid or incomplete parameters - ensure all required fields are present
 
 ### Error Analysis and Classification Framework
 
