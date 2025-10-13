@@ -101,14 +101,22 @@ docker run -d \
 
 ### 3. Setup Environment Variables
 
-Create a `.env` file with your domain configuration:
+The compose setup expects `/home/pezzos/docker/config/secrets/remote_mcp_proxy.env`. The file is symlinked into this directory as `.env`.
 
 ```bash
-# Copy example file
-cp .env.example .env
+cd /home/pezzos/docker/config
+cp secrets/remote_mcp_proxy.env secrets/remote_mcp_proxy.env.example  # optional backup
+${EDITOR:-nano} secrets/remote_mcp_proxy.env
+```
 
-# Edit with your domain
-echo "DOMAIN=your-domain.com" > .env
+Example contents:
+
+```env
+DOMAIN=proxy.example.com
+LOG_LEVEL_SYSTEM=INFO
+LOG_LEVEL_MCP=DEBUG
+LOG_RETENTION_SYSTEM=24h
+LOG_RETENTION_MCP=12h
 ```
 
 ### 4. Use Docker Compose with Traefik
